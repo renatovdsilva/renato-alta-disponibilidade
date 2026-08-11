@@ -1,0 +1,12 @@
+replicaCount: 1
+ingress:
+  host: quinta-dev.localhost
+
+# Secret próprio: o NEXTAUTH_URL tem de corresponder ao host deste ambiente
+# (http://quinta-dev.localhost). Reutilizar o Secret de produção partia o
+# login em dev, com o secret certo e o callback errado.
+secret:
+  name: quinta-db-dev
+resources:
+  requests: { cpu: 50m, memory: 64Mi }
+  limits:   { cpu: 250m, memory: 256Mi }

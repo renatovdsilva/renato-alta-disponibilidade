@@ -1,0 +1,39 @@
+# Copiar para a raiz do repositório quintadocalvario.
+
+node_modules
+.next
+out
+build
+
+# base de dados SQLite local — substituída por PostgreSQL (D9).
+# Nunca deve entrar na imagem, nem sequer durante a transição.
+*.db
+*.db-journal
+prisma/*.db
+prisma/*.db-journal
+
+# credenciais e ambiente
+.env
+.env.*
+!.env.example
+
+# scripts de Windows, não servem dentro de um container Linux
+*.bat
+instalar.bat
+push-github.bat
+
+# metadados e desenvolvimento
+.git
+.gitignore
+.github
+*.md
+README.md
+Dockerfile
+Dockerfile.baseline
+.dockerignore
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+npm-debug.log*
+coverage

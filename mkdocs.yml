@@ -1,0 +1,75 @@
+site_name: Renato — Alta Disponibilidade
+site_description: Plataforma Kubernetes auto-hospedada — documentação de processos
+site_author: Renato Vieira da Silva
+repo_url: https://github.com/renatovdsilva/renato-alta-disponibilidade
+repo_name: renatovdsilva/renato-alta-disponibilidade
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: pt
+  palette:
+    - scheme: default
+      primary: blue grey
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Modo escuro
+    - scheme: slate
+      primary: blue grey
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Modo claro
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+    - toc.follow
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+plugins:
+  - search:
+      lang: pt
+
+nav:
+  - Início: index.md
+  - Preparação:
+      - Ponto de partida: 00-ponto-de-partida.md
+      - Instalação do WSL2: 01-instalacao-wsl2.md
+      - Instalação das ferramentas: 01-instalacao.md
+  - Construção:
+      - Criação do cluster: 02-cluster.md
+      - Containerização: 03-containerizacao.md
+      - Deploy: 04-deploy.md
+      - Helm: 05-helm.md
+  - Plataforma:
+      - Monitorização: 06-monitorizacao.md
+      - GitOps: 07-gitops.md
+  - Referência:
+      - Operação: 08-operacao.md
+      - Troubleshooting: 09-troubleshooting.md
+      - Decisões de arquitetura: 10-decisoes.md
+      - Métricas: 11-metricas.md
+      - Sobre esta documentação: 12-documentacao.md

@@ -1,0 +1,23 @@
+# syntax=docker/dockerfile:1
+#
+# BASELINE — NÃO USAR EM PRODUÇÃO.
+#
+# Existe só para medir. É a versão ingénua: copia o repositório inteiro
+# (incluindo public_html.zip, os error_log e o gera_senha.php), corre como
+# root e não limpa a cache do apt. O tamanho desta imagem é o "antes" da
+# tabela em docs/11-metricas.md.
+#
+# Construir ANTES de existir .dockerignore, senão a comparação fica falseada:
+#   cd ~/projects/briosatecnica-agenda
+#   docker build -f Dockerfile.baseline -t briosa-agenda:baseline .
+
+FROM php:8.2-apache
+
+RUN a2enmod rewrite \
+ && docker-php-ext-install pdo_mysql mysqli \
+ && apt-get update \
+ && apt-get install -y curl
+
+COPY . /var/www/html/
+
+EXPOSE 80

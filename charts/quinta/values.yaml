@@ -1,0 +1,44 @@
+replicaCount: 2
+
+image:
+  repository: quinta-calvario
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+
+# Secret com as credenciais e a configuração do NextAuth.
+# Criado fora do chart e fora do Git — ver k8s/examples/postgres-secret.example.yaml.
+# O chart assume que já existe; se faltar, os pods ficam em
+# CreateContainerConfigError, que é o comportamento pretendido: melhor falhar
+# à vista do que arrancar sem base de dados.
+secret:
+  name: quinta-db
+  keys:
+    - DATABASE_URL
+    - NEXTAUTH_SECRET
+    - NEXTAUTH_URL
+
+ingress:
+  enabled: true
+  className: nginx
+  host: quinta.localhost
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+probes:
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  liveness:
+    initialDelaySeconds: 20
+    periodSeconds: 15

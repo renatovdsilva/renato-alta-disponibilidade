@@ -1,0 +1,91 @@
+# PostgreSQL da Quinta do Calvário — ver decisão D9 em docs/10-decisoes.md.
+#
+# Substitui o ficheiro SQLite que impedia a Quinta de correr com mais de
+# uma réplica. Mesmo padrão do MySQL da Briosa: StatefulSet com
+# volumeClaimTemplates, Service headless, credenciais em Secret.
+#
+# PRÉ-REQUISITO: o Secret `quinta-db` tem de existir antes.
+# Não está no repositório (D7). Ver k8s/examples/postgres-secret.example.yaml.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: quinta
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: alta-disponibilidade
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+    spec:
+      securityContext:
+        # 999 é o uid/gid do utilizador postgres na imagem oficial.
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef: { name: quinta-db, key: POSTGRES_DB }
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: quinta-db, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: quinta-db, key: POSTGRES_PASSWORD }
+            - name: PGDATA
+              # Subdiretório em vez da raiz do volume: o local-path do k3s
+              # cria a pasta já com conteúdo (lost+found em alguns casos) e
+              # o initdb do Postgres recusa-se a arrancar num diretório
+              # que não esteja vazio.
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -h 127.0.0.1"]
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -h 127.0.0.1"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -h 127.0.0.1"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # storageClass por omissão do k3s (local-path). O volume fica preso
+        # ao nó onde o pod for agendado — limitação assumida em D9.
+        resources:
+          requests:
+            storage: 2Gi

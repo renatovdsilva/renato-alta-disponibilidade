@@ -1,0 +1,36 @@
+# Copiar para a raiz do repositório briosatecnica-agenda.
+# Tudo o que está aqui nunca chega ao contexto de build.
+
+# arquivo duplicado do código — nunca deve entrar na imagem
+public_html.zip
+*.zip
+
+# logs commitados por engano
+error_log
+**/error_log
+*.log
+
+# utilitário de geração de passwords: não tem de ser servido pela web
+public_html/public_html/gera_senha.php
+
+# credenciais e configuração local
+.env
+.env.*
+**/config/database.local.php
+
+# metadados e ficheiros de desenvolvimento
+.git
+.gitignore
+.github
+*.md
+**/README.md
+Dockerfile
+Dockerfile.baseline
+.dockerignore
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# schema: aplicado pelo MySQL no cluster, não pela imagem da aplicação
+public_html/public_html/app/database/schema.sql

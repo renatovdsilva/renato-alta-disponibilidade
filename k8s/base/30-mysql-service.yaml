@@ -1,0 +1,27 @@
+# Service headless do MySQL.
+#
+# clusterIP: None significa que o DNS do cluster devolve o IP do pod em vez
+# de um IP virtual balanceado. Num StatefulSet é isso que dá a cada réplica
+# um nome estável e previsível:
+#
+#   mysql-0.mysql.briosa.svc.cluster.local
+#
+# É esse nome que a aplicação usa em DB_HOST. Com um Service normal não havia
+# forma de endereçar uma réplica concreta — irrelevante com uma só, essencial
+# quando houver réplicas de leitura.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: briosa
+  labels:
+    app.kubernetes.io/name: mysql
+    app.kubernetes.io/part-of: alta-disponibilidade
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql

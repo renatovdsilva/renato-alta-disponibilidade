@@ -1,0 +1,43 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: alta-disponibilidade-alerts
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: aplicacoes
+      rules:
+        - alert: PodCrashLooping
+          expr: increase(kube_pod_container_status_restarts_total{namespace=~"quinta|briosa"}[10m]) > 3
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "Pod {{ $labels.pod }} em CrashLoopBackOff"
+            description: "Mais de 3 reinícios em 10 minutos no namespace {{ $labels.namespace }}."
+
+        - alert: PodNotReady
+          expr: kube_pod_status_ready{condition="false", namespace=~"quinta|briosa"} == 1
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "Pod {{ $labels.pod }} não está Ready há mais de 5 minutos"
+
+        - alert: HighMemoryUsage
+          expr: |
+            container_memory_working_set_bytes{namespace=~"quinta|briosa"}
+            / on(container,pod,namespace)
+            kube_pod_container_resource_limits{resource="memory"} > 0.9
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} acima de 90% do limite de memória"
+            description: "Risco de OOMKill."
+
+        - alert: DeploymentSemReplicas
+          expr: kube_deployment_status_replicas_available{namespace=~"quinta|briosa"} == 0
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "Deployment {{ $labels.deployment }} sem réplicas disponíveis"

@@ -1,0 +1,42 @@
+name: Validação
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  yaml:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validar manifests Kubernetes
+        run: |
+          pip install pyyaml
+          python - <<'PY'
+          import glob, sys, yaml
+          erros = 0
+          for f in glob.glob('k8s/**/*.yaml', recursive=True) + glob.glob('argocd/*.yaml') + glob.glob('monitoring/*.yaml'):
+              try:
+                  list(yaml.safe_load_all(open(f)))
+                  print('ok  ', f)
+              except Exception as e:
+                  erros += 1
+                  print('ERRO', f, e)
+          sys.exit(1 if erros else 0)
+          PY
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint charts/quinta
+      - run: helm template quinta charts/quinta -f charts/quinta/values-prod.yaml > /dev/null
+
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - run: shellcheck scripts/*.sh || true

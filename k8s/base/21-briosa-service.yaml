@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: briosa-agenda
+  namespace: briosa
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: briosa-agenda
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

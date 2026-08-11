@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1
+#
+# BASELINE — NÃO USAR EM PRODUÇÃO.
+#
+# Uma etapa só. Fica com o toolchain de compilação, o node_modules completo
+# (dependências de desenvolvimento incluídas), o código-fonte e o .next
+# inteiro. Corre como root. É o "antes" da tabela em docs/11-metricas.md.
+#
+# Construir ANTES de existir .dockerignore, senão a comparação fica falseada:
+#   cd ~/projects/quintadocalvario
+#   docker build -f Dockerfile.baseline -t quinta-calvario:baseline .
+#
+# Nota: usa `node:20` (Debian), não `node:20-alpine`. É de propósito — é a
+# imagem que se escolhe sem pensar no assunto, e parte da diferença medida
+# vem daí. A outra parte vem de não separar build de runtime.
+
+FROM node:20
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm install
+
+COPY . .
+RUN npx prisma generate && npm run build
+
+EXPOSE 3000
+CMD ["npm", "run", "start"]

@@ -1,0 +1,24 @@
+# Service headless do PostgreSQL da Quinta — mesmo padrão do MySQL da Briosa.
+#
+# clusterIP: None → o DNS devolve o IP do pod, não um IP virtual. Dá a cada
+# réplica do StatefulSet um nome estável:
+#
+#   postgres-0.postgres.quinta.svc.cluster.local
+#
+# É esse o host dentro da DATABASE_URL.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: quinta
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: alta-disponibilidade
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

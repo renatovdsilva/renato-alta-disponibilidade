@@ -1,0 +1,10 @@
+backup/
+*.local
+.env
+.env.*
+secrets/
+kubeconfig
+*.kubeconfig
+site/
+.venv/
+__pycache__/

@@ -1,0 +1,115 @@
+# MySQL como StatefulSet — ver decisão D8 em docs/10-decisoes.md.
+#
+# Porquê StatefulSet e não Deployment:
+#   - identidade estável (mysql-0) e DNS previsível através do Service headless
+#   - volumeClaimTemplates dá a cada réplica o seu próprio PVC, que sobrevive
+#     ao pod e não é partilhado
+#   - o pod é recriado com o mesmo nome e o mesmo volume, não com outros novos
+#
+# Um Deployment com PVC único funcionaria com uma réplica, mas partilharia o
+# volume se alguém escalasse — e duas instâncias de MySQL sobre o mesmo
+# datadir corrompem a base de dados.
+#
+# PRÉ-REQUISITO: o Secret `briosa-db` tem de existir ANTES de aplicar este
+# ficheiro. Não está no repositório (D7). Ver k8s/examples/mysql-secret.example.yaml.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  namespace: briosa
+  labels:
+    app.kubernetes.io/name: mysql
+    app.kubernetes.io/part-of: alta-disponibilidade
+spec:
+  serviceName: mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mysql
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mysql
+    spec:
+      securityContext:
+        # 999 é o uid/gid do utilizador mysql na imagem oficial.
+        # fsGroup garante que o volume montado fica escrevível por ele.
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          imagePullPolicy: IfNotPresent
+          args:
+            # utf8mb4 em todo o lado — o utf8 do MySQL são 3 bytes e não
+            # cobre emojis nem alguns carateres. Ver problema 4 no doc 03.
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_unicode_ci
+          ports:
+            - name: mysql
+              containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: briosa-db, key: MYSQL_ROOT_PASSWORD }
+            - name: MYSQL_DATABASE
+              valueFrom:
+                secretKeyRef: { name: briosa-db, key: DB_NAME }
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef: { name: briosa-db, key: DB_USER }
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: briosa-db, key: DB_PASSWORD }
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: schema
+              # A imagem oficial corre tudo o que estiver aqui (.sql, .sh)
+              # na PRIMEIRA inicialização, quando o datadir está vazio.
+              # Depois disso é ignorado — para reaplicar o schema é preciso
+              # apagar o PVC. Ver docs/03-containerizacao.md.
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          startupProbe:
+            # O primeiro arranque cria o datadir e corre o schema; pode
+            # demorar. Até 2 minutos (24 × 5 s) antes de desistir.
+            exec:
+              command: ["bash", "-c", "mysqladmin ping -h 127.0.0.1 -u root -p\"$MYSQL_ROOT_PASSWORD\""]
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            exec:
+              command: ["bash", "-c", "mysqladmin ping -h 127.0.0.1 -u root -p\"$MYSQL_ROOT_PASSWORD\""]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["bash", "-c", "mysqladmin ping -h 127.0.0.1 -u root -p\"$MYSQL_ROOT_PASSWORD\""]
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 5
+      volumes:
+        - name: schema
+          configMap:
+            name: mysql-schema
+            optional: false
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # Sem storageClassName: usa a classe por omissão do k3s (local-path),
+        # que cria o volume em disco no nó onde o pod ficar agendado.
+        # Consequência assumida: os dados ficam presos a esse nó.
+        resources:
+          requests:
+            storage: 2Gi

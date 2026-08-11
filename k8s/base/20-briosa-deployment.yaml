@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: briosa-agenda
+  namespace: briosa
+  labels:
+    app.kubernetes.io/name: briosa-agenda
+    app.kubernetes.io/part-of: alta-disponibilidade
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: briosa-agenda
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: briosa-agenda
+    spec:
+      containers:
+        - name: web
+          image: briosa-agenda:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              # 8080, não 80: o Apache foi movido para uma porta alta para o
+              # container poder correr como www-data. O Service usa targetPort
+              # nomeado (http), por isso não muda nada do lado dele.
+              containerPort: 8080
+          env:
+            # Chaves listadas uma a uma, e não com envFrom: o Secret também
+            # tem MYSQL_ROOT_PASSWORD, que só o MySQL precisa de ver. A
+            # aplicação não deve receber a password de root.
+            # Secret criado fora do Git — ver k8s/examples/mysql-secret.example.yaml.
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef: { name: briosa-db, key: DB_HOST }
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef: { name: briosa-db, key: DB_PORT }
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef: { name: briosa-db, key: DB_NAME }
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef: { name: briosa-db, key: DB_USER }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: briosa-db, key: DB_PASSWORD }
+            - name: DB_CHARSET
+              valueFrom:
+                secretKeyRef: { name: briosa-db, key: DB_CHARSET }
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 15
