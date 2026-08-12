@@ -214,7 +214,39 @@ Fica como pendência de aplicação, não de cluster.
 
 ---
 
-## 4.7 Rollout e rollback
+## 4.7 Acesso a partir do exterior
+
+O cluster corre em WSL2, sem IP público. Para mostrar a aplicação a alguém de
+fora usou-se um túnel:
+
+```bash
+# terminal 1 — expor o Ingress na máquina
+kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8080:80
+
+# terminal 2 — túnel público
+cloudflared tunnel --url http://localhost:8080
+```
+
+Testado com sucesso por outra pessoa, de outra rede, em 11/08/2026.
+
+**Sem `--http-host-header`.** A tentação é passar
+`--http-host-header quinta.localhost` para casar com a regra de host do
+Ingress. Funciona para servir páginas e **parte a autenticação**: o NextAuth
+compara o `Host` recebido com o `NEXTAUTH_URL` e recusa a sessão em silêncio,
+sem erro nenhum. Ver `docs/09-troubleshooting.md`.
+
+A solução foi um Ingress **catch-all**, sem `host`, que aceita qualquer
+cabeçalho e encaminha para o mesmo Service. Com ele o túnel corre sem flags e
+a aplicação recebe o `Host` do domínio público — o mesmo que está no
+`NEXTAUTH_URL`.
+
+> Isto é uma montagem de demonstração, não de produção. Um túnel expõe a
+> aplicação à internet sem WAF, sem rate limiting e com credenciais de teste.
+> Serve para mostrar o trabalho a alguém e deve ser desligado a seguir.
+
+---
+
+## 4.8 Rollout e rollback
 
 ```bash
 kubectl set image deployment/quinta-web web=quinta-calvario:1.1.0 -n quinta
@@ -234,5 +266,8 @@ kubectl rollout undo deployment/quinta-web -n quinta
 | 11/08/2026 | Service headless | `CLUSTER-IP: None`, porta 5432 |
 | 11/08/2026 | PVC `data-postgres-0` | `Bound`, 2 Gi, RWO, storageclass `local-path` |
 | 11/08/2026 | teste de persistência | `delete pod postgres-0` → `Running` aos 2 s, `Ready` aos **6 s**, dados intactos |
-| | primeiro deploy das aplicações | |
+| 11/08/2026 | `k3d image import quinta-calvario:1.0.0` | **6 s** para os 3 nós |
+| 11/08/2026 | primeiro deploy da Quinta | `quinta-web` com 2 réplicas, agendadas em **nós diferentes** (agent-0 e agent-1). Service e Ingress aplicados, aplicação acessível e login funcional |
+| 11/08/2026 | rolling update (2×) | `kubectl rollout restart` — sempre com uma réplica a servir, **zero downtime** |
+| 11/08/2026 | acesso externo | túnel cloudflared sobre o Ingress; testado com sucesso por outra pessoa, de outra rede |
 | | teste de resiliência das aplicações | pedidos falhados: |

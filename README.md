@@ -65,7 +65,7 @@ cd renato-alta-disponibilidade
 ./scripts/bootstrap.sh
 ```
 
-O detalhe completo está em [`docs/01-instalacao.md`](docs/01-instalacao.md).
+O detalhe completo está em [`docs/01b-instalacao-ferramentas.md`](docs/01b-instalacao-ferramentas.md).
 
 ---
 
@@ -82,8 +82,8 @@ O processo está documentado do zero — desde a verificação da BIOS até ao d
 | # | Documento | O que cobre |
 |---|---|---|
 | 00 | [Ponto de partida](docs/00-ponto-de-partida.md) | Estado inicial da máquina, objetivos e critérios de sucesso |
-| 01a | [Instalação do WSL2](docs/01-instalacao-wsl2.md) | Virtualização, WSL2, Ubuntu, .wslconfig, Docker Desktop |
-| 01b | [Instalação das ferramentas](docs/01-instalacao.md) | kubectl, k3d, Helm |
+| 01a | [Instalação do WSL2](docs/01a-instalacao-wsl2.md) | Virtualização, WSL2, Ubuntu, .wslconfig, Docker Desktop |
+| 01b | [Instalação das ferramentas](docs/01b-instalacao-ferramentas.md) | kubectl, k3d, Helm |
 | 02 | [Criação do cluster](docs/02-cluster.md) | k3d, 3 nós, Ingress NGINX |
 | 03 | [Containerização](docs/03-containerizacao.md) | Dockerfiles multi-stage, import de imagens |
 | 04 | [Deploy](docs/04-deploy.md) | Deployments, Services, Ingress, testes de resiliência |

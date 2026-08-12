@@ -4,6 +4,9 @@ kind: Ingress
 metadata:
   name: {{ include "quinta.fullname" . }}
   labels: {{- include "quinta.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:
@@ -17,4 +20,37 @@ spec:
                 name: {{ include "quinta.fullname" . }}
                 port:
                   number: {{ .Values.service.port }}
+{{- if .Values.ingress.catchAll }}
+---
+# Ingress sem `host`: responde a qualquer cabeçalho Host que chegue ao
+# controller. Serve o acesso por túnel (cloudflared), onde o domínio público
+# não é conhecido à partida.
+#
+# Com uma regra de host fixa seria preciso reescrever o Host no túnel, e o
+# NextAuth recusa a sessão — sem erro — quando o Host recebido não coincide
+# com o NEXTAUTH_URL. Ver docs/09-troubleshooting.md.
+#
+# Nota: sendo catch-all, apanha pedidos a hosts que mais nenhuma regra
+# reclame. Com mais aplicações no cluster, convém reavaliar.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "quinta.fullname" . }}-catchall
+  labels: {{- include "quinta.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "quinta.fullname" . }}
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}
 {{- end }}

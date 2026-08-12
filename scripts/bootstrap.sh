@@ -10,7 +10,7 @@ die()  { echo -e "${RED}xx ${NC} $*"; exit 1; }
 
 log "A verificar dependências"
 for cmd in docker kubectl k3d helm; do
-  command -v "$cmd" >/dev/null || die "$cmd não encontrado. Ver docs/01-instalacao.md"
+  command -v "$cmd" >/dev/null || die "$cmd não encontrado. Ver docs/01b-instalacao-ferramentas.md"
 done
 docker info >/dev/null 2>&1 || die "Docker não está a correr. Abre o Docker Desktop."
 

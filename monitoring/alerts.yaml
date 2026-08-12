@@ -1,3 +1,18 @@
+# Regras de alerta das aplicações.
+#
+# Revistas em 12/08/2026 contra o que está realmente a correr no cluster.
+#
+# Decisão deliberada: **nenhuma regra refere nomes de Deployment**. Filtram por
+# namespace e por labels. O nome do Deployment da Quinta mudou de `quinta-web`
+# para `quinta-quinta` quando o ArgoCD assumiu o chart, e voltará a mudar
+# quando o `fullnameOverride` for para o Git — regras presas a nomes ficariam
+# silenciosamente inúteis a cada mudança, que é a pior falha possível num
+# alerta.
+#
+# O namespace `briosa` já está contemplado, mas ainda não tem nada a correr:
+# não há imagem construída nem MySQL. Sem métricas, estas regras simplesmente
+# não avaliam nada para esse namespace. É intencional — quando a Briosa
+# entrar, os alertas passam a cobri-la sem alterações.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -26,7 +41,7 @@ spec:
 
         - alert: HighMemoryUsage
           expr: |
-            container_memory_working_set_bytes{namespace=~"quinta|briosa"}
+            container_memory_working_set_bytes{namespace=~"quinta|briosa", container!=""}
             / on(container,pod,namespace)
             kube_pod_container_resource_limits{resource="memory"} > 0.9
           for: 5m
@@ -41,3 +56,59 @@ spec:
           labels: { severity: critical }
           annotations:
             summary: "Deployment {{ $labels.deployment }} sem réplicas disponíveis"
+
+        - alert: DeploymentDegradado
+          # Menos réplicas disponíveis do que as desejadas, sem chegar a zero.
+          # Apanha o caso em que uma das duas réplicas caiu: o serviço continua
+          # de pé, mas a alta disponibilidade deixou de existir. Sem este
+          # alerta, só se dá por isso quando a segunda também cai.
+          expr: |
+            kube_deployment_status_replicas_available{namespace=~"quinta|briosa"}
+            < kube_deployment_spec_replicas{namespace=~"quinta|briosa"}
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.deployment }} degradado — a correr sem redundância"
+
+    - name: bases-de-dados
+      rules:
+        - alert: BaseDeDadosIndisponivel
+          # Cobre o StatefulSet do Postgres (quinta) e o do MySQL (briosa,
+          # quando existir), sem nomear nenhum.
+          expr: kube_statefulset_status_replicas_ready{namespace=~"quinta|briosa"} == 0
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "StatefulSet {{ $labels.statefulset }} sem réplicas prontas"
+            description: "A aplicação do namespace {{ $labels.namespace }} fica sem base de dados."
+
+        - alert: VolumeQuaseCheio
+          # O local-path do k3s não cresce sozinho. Um PVC cheio de base de
+          # dados corrompe escritas e é dos incidentes mais desagradáveis de
+          # recuperar — 15% de folga dá tempo para agir.
+          expr: |
+            kubelet_volume_stats_available_bytes{namespace=~"quinta|briosa"}
+            / kubelet_volume_stats_capacity_bytes{namespace=~"quinta|briosa"} < 0.15
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "PVC {{ $labels.persistentvolumeclaim }} com menos de 15% livre"
+
+# ---------------------------------------------------------------------------
+# NÃO implementado, e porquê
+# ---------------------------------------------------------------------------
+# IngressDown — o doc 06 previa um alerta sobre o Ingress sem endpoints. As
+# métricas do Ingress NGINX (taxa de pedidos, 5xx, latência) só existem se o
+# controller for instalado com `controller.metrics.enabled=true` e um
+# ServiceMonitor. Não foi o caso — o Ingress foi instalado sem métricas.
+#
+# Para as ter, é preciso reinstalar o controller:
+#   helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+#     --namespace ingress-nginx \
+#     --set controller.service.type=LoadBalancer \
+#     --set controller.metrics.enabled=true \
+#     --set controller.metrics.serviceMonitor.enabled=true \
+#     --set controller.metrics.serviceMonitor.additionalLabels.release=monitoring
+#
+# Entretanto, DeploymentSemReplicas cobre o caso prático: se não há pods, o
+# Ingress não tem para onde encaminhar.

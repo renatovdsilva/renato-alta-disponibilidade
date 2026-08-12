@@ -177,7 +177,7 @@ complete -F __start_kubectl k
 
 | Data | O que foi feito | Notas |
 |---|---|---|
-| 10/08/2026 | WSL2 + Ubuntu 22.04 | ver `01-instalacao-wsl2.md` |
+| 10/08/2026 | WSL2 + Ubuntu 22.04 | ver `01a-instalacao-wsl2.md` |
 | 10/08/2026 | Docker Desktop instalado e integrado | dois erros pelo caminho, documentados |
 | 10/08/2026 | kubectl, k3d e Helm instalados | sem problemas |
 | 11/08/2026 | Node.js 20 instalado no Ubuntu | o `node -v` já respondia **v24.14.1** — era o Node do *Windows* via interop. Ver 1.5 |

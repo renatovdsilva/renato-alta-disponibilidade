@@ -39,7 +39,8 @@ contexto de build.
 | Tempo de criação do cluster | ~75 s |
 | Ingress NGINX pronto | ~76 s |
 | Namespaces aplicacionais | 2 (`quinta`, `briosa`) |
-| Aplicações em execução | *(por medir — só as bases de dados estão no cluster)* |
+| Aplicações em execução | 1 (Quinta do Calvário, 2 réplicas em nós diferentes) |
+| `k3d image import` para os 3 nós | 6 s |
 | RAM consumida em repouso | |
 | Tempo de bootstrap do zero | |
 
@@ -61,8 +62,15 @@ contexto de build.
 |---|---|
 | Recuperação do pod da base de dados (`delete pod` → `Ready`) | **6 s** — `Running` aos 2 s, `Ready` aos 6 s |
 | Persistência dos dados após destruição do pod | **total** — nenhuma perda |
+| **Queda de energia real** (12/08/2026, sem encerramento ordenado) | **~5 min** até todos os pods `Running`, **zero intervenção manual**, PVC remontado com o mesmo id e dados intactos |
+| Estabilidade do cluster antes da queda | 38 h contínuas, 3 nós `Ready`, sem falhas |
+| Self-heal do ArgoCD (`scale` manual → reposto) | **1–2 s** — as réplicas extra nunca chegaram a materializar-se |
+| Primeiro sync da Application após criação | 3 s |
+| Recriação dos recursos pelo ArgoCD | 61 s |
 | Reconexão automática dos clientes | **não** — pool com ligações mortas (`E57P01`), reinício manual |
-| Pedidos falhados ao matar um pod da aplicação | |
+| Rolling update da Quinta (2 execuções) | **sem downtime** — sempre ≥1 réplica a servir |
+| Distribuição das réplicas | 2 réplicas em nós diferentes (agent-0, agent-1) |
+| Pedidos falhados ao matar um pod da aplicação | *(por medir — falta o teste com `curl` em ciclo)* |
 | Tempo de rolling update sem downtime | |
 | Tempo de recuperação após falha do nó | |
 
@@ -112,6 +120,15 @@ a medição existir.
 • Built a 3-node Kubernetes cluster (k3s/k3d) with NGINX ingress, resource
   limits and liveness/readiness probes, provisioned from scratch by a single
   bootstrap script.
+• Deployed the application across multiple nodes with 2 replicas and performed
+  rolling updates with zero downtime, always keeping at least one replica
+  serving traffic.
+• Survived an unplanned power outage with no graceful shutdown: the cluster
+  recovered autonomously in ~5 minutes with zero manual intervention, remounting
+  persistent volumes with no data loss.
+• Implemented GitOps delivery with ArgoCD, reverting manual cluster changes in
+  1-2 seconds — before the drifted state could materialize — and making every
+  deployment an auditable Git commit.
 ```
 
 **Por preencher (falta medir):**

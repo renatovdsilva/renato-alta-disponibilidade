@@ -4,7 +4,7 @@
 
 | Aplicação | Stack | Repositório |
 |---|---|---|
-| Quinta do Calvário | Next.js 14, TypeScript, Prisma, SQLite | github.com/renatovdsilva/quintadocalvario |
+| Quinta do Calvário | Next.js 14, TypeScript, Prisma, PostgreSQL *(migrado de SQLite — D9)* | github.com/renatovdsilva/quintadocalvario |
 | Briosa Agenda | PHP | github.com/renatovdsilva/briosatecnica-agenda |
 
 ---
@@ -35,7 +35,7 @@ Linux — excluídos pelo `.dockerignore`.
 
 | Pendência | Estado |
 |---|---|
-| Node.js dentro do Ubuntu | **resolvido em 11/08** — não existia; o `npm` era o do Windows. Ver `01-instalacao.md`, 1.5 |
+| Node.js dentro do Ubuntu | **resolvido em 11/08** — não existia; o `npm` era o do Windows. Ver `01b-instalacao-ferramentas.md`, 1.5 |
 | `next.config.ts` não suportado no Next 14 | **resolvido** — convertido para `next.config.mjs` |
 | `output: 'standalone'` | feito, já no `.mjs` |
 | `NEXTAUTH_SECRET` / `NEXTAUTH_URL` em falta | **resolvido** — `.env.local` em dev, Secret no cluster |

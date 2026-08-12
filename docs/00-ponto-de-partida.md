@@ -69,12 +69,12 @@ wsl -l -v
 O projeto está concluído quando todas estas afirmações forem verdadeiras:
 
 - [x] `kubectl get nodes` mostra três nós em `Ready` *(confirmado em 11/08/2026 — ver `02-cluster.md`)*
-- [ ] As duas aplicações respondem no browser através do Ingress
+- [ ] As duas aplicações respondem no browser através do Ingress *(Quinta sim, desde 11/08/2026; Briosa por construir)*
 - [ ] Matar um pod não interrompe o serviço, e isso está medido
 - [ ] O Grafana mostra métricas dos pods e dos nós
 - [ ] Um alerta dispara quando se provoca uma falha, com tempo registado
 - [ ] Um commit no Git provoca deploy automático sem intervenção
-- [ ] Alterar o cluster à mão é revertido pelo ArgoCD
+- [x] Alterar o cluster à mão é revertido pelo ArgoCD *(12/08/2026 — reposto em 1–2 s)*
 - [ ] `k3d cluster delete` seguido de `./scripts/bootstrap.sh` reconstrói tudo
 - [ ] O ficheiro `docs/11-metricas.md` está preenchido com números medidos
 - [ ] Um estranho consegue reproduzir o ambiente só com esta documentação
@@ -99,7 +99,9 @@ O projeto está concluído quando todas estas afirmações forem verdadeiras:
 
 | Data | Sessão | Tempo | O que ficou feito | O que ficou por fazer |
 |---|---|---|---|---|
-| 10/08/2026 | 1 | | WSL2 + Ubuntu 22.04, Docker Desktop 4.86.0 integrado, kubectl v1.36.3, k3d v5.9.0 e Helm v3.21.3 instalados. Dois erros de integração do Docker/WSL resolvidos e documentados em `01-instalacao-wsl2.md`. | — (sessão fechada) |
+| 10/08/2026 | 1 | | WSL2 + Ubuntu 22.04, Docker Desktop 4.86.0 integrado, kubectl v1.36.3, k3d v5.9.0 e Helm v3.21.3 instalados. Dois erros de integração do Docker/WSL resolvidos e documentados em `01a-instalacao-wsl2.md`. | — (sessão fechada) |
 | 10–11/08/2026 | 2 | | Cluster `alta-disponibilidade` criado (1 control plane + 2 workers, k3s v1.35.5+k3s1), 3 nós `Ready` em ~75 s. Traefik desativado na criação. Ingress NGINX instalado por Helm em 11/08 — controller `1/1 Running` em ~76 s, service `LoadBalancer` ativo. | — (sessão fechada) |
 | 11/08/2026 | 3 | | Node 20 instalado no Ubuntu (o `npm` era o do Windows). Quinta do Calvário executada pela primeira vez: `next.config.ts` → `.mjs`, variáveis do NextAuth, Prisma 5.22, seed e login funcionais. Migração SQLite → PostgreSQL (D9): Postgres 16.14 no cluster, `postgres-0` `1/1 Running`, PVC 2 Gi `Bound`, schema por `db push`, seed e login contra o cluster. Teste de persistência: pod destruído, `Ready` em 6 s, dados intactos. Imagem da Quinta de 3,4 GB para 282 MB (−92%). Briosa: estrutura real levantada, Dockerfile corrigido e manifests do MySQL escritos. | Migrações versionadas do Prisma (`shadowDatabaseUrl`); build e deploy da Briosa; aplicações ainda não estão a correr no cluster |
-| | 4 | | | |
+| 11/08/2026 | 3 (cont.) | | Deploy da Quinta no cluster: imagem importada para os 3 nós em 6 s, `quinta-web` com 2 réplicas em nós diferentes, Service e Ingress aplicados, login funcional. Rolling update demonstrado 2× sem downtime. Acesso externo por túnel cloudflared, validado por outra pessoa noutra rede. Repositório publicado e GitHub Pages ativas. | Briosa por construir; migrações versionadas do Prisma |
+| 12/08/2026 | 6 | | ArgoCD v3.5.0 instalado. Quinta migrada de `kubectl apply` para GitOps: recursos antigos apagados (dados intactos), Application `Healthy`/`Synced`, primeiro sync em 3 s e recursos recriados em 61 s. Self-heal validado — `scale` manual revertido em 1–2 s. **Queda de energia real às 07:41**: cluster recuperou sozinho em ~5 min, sem intervenção e sem perda de dados. | Chart em produção ainda é a versão antiga do Git (nomes `quinta-quinta`); falta commit e push |
+| | 4 e 5 | | *(Helm e monitorização — o ArgoCD foi feito antes da ordem prevista)* | |

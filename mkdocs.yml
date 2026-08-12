@@ -57,8 +57,8 @@ nav:
   - Início: index.md
   - Preparação:
       - Ponto de partida: 00-ponto-de-partida.md
-      - Instalação do WSL2: 01-instalacao-wsl2.md
-      - Instalação das ferramentas: 01-instalacao.md
+      - Instalação do WSL2: 01a-instalacao-wsl2.md
+      - Instalação das ferramentas: 01b-instalacao-ferramentas.md
   - Construção:
       - Criação do cluster: 02-cluster.md
       - Containerização: 03-containerizacao.md

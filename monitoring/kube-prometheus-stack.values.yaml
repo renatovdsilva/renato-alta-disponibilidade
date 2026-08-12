@@ -1,0 +1,126 @@
+# Values do kube-prometheus-stack para este cluster k3d.
+#
+# Instalar com:
+#   helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+#     --namespace monitoring --create-namespace \
+#     -f monitoring/kube-prometheus-stack.values.yaml \
+#     --set grafana.adminPassword="$GRAFANA_PASS" \
+#     --wait --timeout 10m
+#
+# A password NUNCA está neste ficheiro (D7) — vai por --set na linha de comandos.
+
+# ---------------------------------------------------------------------------
+# Componentes do control plane que NÃO funcionam em k3s
+# ---------------------------------------------------------------------------
+# O k3s corre o scheduler, o controller-manager e o etcd embutido dentro de um
+# único processo, e não expõe as portas de métricas que estes ServiceMonitors
+# esperam (10259, 10257, 2381). Deixá-los ligados enche o Prometheus de alvos
+# permanentemente "down" e faz disparar o alerta TargetDown do próprio chart —
+# ruído que ensina a ignorar alertas, que é o pior hábito possível.
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  # O k3s usa o kube-proxy embutido no agente, sem endpoint de métricas próprio.
+  enabled: false
+
+# O kubelet e o cAdvisor funcionam normalmente — são a fonte das métricas
+# de CPU e memória por container.
+kubelet:
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# Prometheus
+# ---------------------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    retentionSize: 4GB
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    # Sem isto, os dados vivem em emptyDir e desaparecem sempre que o pod
+    # reinicia. Depois da queda de energia de 12/08 isso deixou de ser
+    # aceitável — o histórico de métricas é precisamente o que se quer ver
+    # DEPOIS de um incidente. Ver docs/08-operacao.md, secção 8.5.
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 5Gi
+    # Descobrir PrometheusRule e ServiceMonitor em qualquer namespace, não só
+    # nos que tenham a label da release. É o que permite ter as regras em
+    # monitoring/alerts.yaml sem as prender a este chart.
+    ruleSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+
+# ---------------------------------------------------------------------------
+# Alertmanager
+# ---------------------------------------------------------------------------
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 1Gi
+
+# ---------------------------------------------------------------------------
+# Grafana
+# ---------------------------------------------------------------------------
+grafana:
+  # adminPassword vem por --set. Não escrever aqui.
+  defaultDashboardsTimezone: Europe/Lisbon
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 512Mi
+  persistence:
+    enabled: true
+    size: 1Gi
+
+# ---------------------------------------------------------------------------
+# Exporters
+# ---------------------------------------------------------------------------
+nodeExporter:
+  enabled: true
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi

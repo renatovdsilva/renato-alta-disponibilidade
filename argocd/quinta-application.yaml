@@ -1,9 +1,28 @@
+# Application do ArgoCD para a Quinta do Calvário.
+#
+# PRÉ-REQUISITOS MANUAIS — o ArgoCD não trata de nenhum destes:
+#
+#   1. Secret `quinta-db` no namespace `quinta`, criado por linha de comandos.
+#      Não está no Git (decisão D7) e o ArgoCD não o cria. Sem ele os pods
+#      ficam em CreateContainerConfigError. Ver k8s/examples/postgres-secret.example.yaml.
+#
+#   2. PostgreSQL a correr no namespace `quinta`. Está em k8s/base/13 e 14 e é
+#      aplicado por kubectl — este chart cobre apenas a aplicação.
+#
+#   3. Imagem `quinta-calvario:1.0.0` importada para os nós:
+#         k3d image import quinta-calvario:1.0.0 -c alta-disponibilidade
+#      A imagem NÃO está em registo nenhum. O ArgoCD não constrói nem publica
+#      imagens — limita-se a aplicar manifests. Por isso o chart usa
+#      imagePullPolicy: IfNotPresent, e uma tag nova exige novo import.
+#
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: quinta
   namespace: argocd
   finalizers:
+    # Garante que apagar a Application apaga também os recursos que ela criou,
+    # em vez de os deixar órfãos no cluster.
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
@@ -12,6 +31,7 @@ spec:
     targetRevision: main
     path: charts/quinta
     helm:
+      # Caminho relativo à pasta do chart (path acima).
       valueFiles:
         - values-prod.yaml
   destination:
@@ -19,13 +39,17 @@ spec:
     namespace: quinta
   syncPolicy:
     automated:
-      prune: true
-      selfHeal: true
+      prune: true       # apagar do Git apaga do cluster
+      selfHeal: true    # alterações manuais no cluster são revertidas
     syncOptions:
       - CreateNamespace=true
+      # Aplica só o que está fora de sincronia, em vez de tudo a cada sync.
+      - ApplyOutOfSyncOnly=true
     retry:
       limit: 3
       backoff:
         duration: 10s
         factor: 2
         maxDuration: 3m
+  # Histórico de sincronizações guardado, para poder reverter pela UI.
+  revisionHistoryLimit: 10

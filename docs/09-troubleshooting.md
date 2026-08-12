@@ -80,7 +80,7 @@ O Docker Desktop tem de estar a correr primeiro.
 
 ### WSL a consumir toda a RAM
 
-Criar `.wslconfig` (ver `docs/01-instalacao.md`) e correr `wsl --shutdown`.
+Criar `.wslconfig` (ver `docs/01b-instalacao-ferramentas.md`) e correr `wsl --shutdown`.
 
 ---
 
@@ -103,7 +103,7 @@ curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 ```
 
-Detalhe em `docs/01-instalacao.md`, secção 1.5.
+Detalhe em `docs/01b-instalacao-ferramentas.md`, secção 1.5.
 
 ---
 
@@ -180,6 +180,136 @@ na etapa de build (`RUN mkdir -p /app/public`). Em alternativa, criar
 
 ---
 
+### Login do NextAuth fica preso em "A entrar...", sem erro nenhum
+
+O pior problema desta sessão, precisamente por **não produzir erro**: sem
+mensagem no browser, sem stack trace, sem nada nos logs do pod. O pedido de
+login parte e a sessão nunca se estabelece.
+
+**Contexto:** acesso à aplicação a partir do exterior, por um túnel cloudflared
+apontado ao Ingress:
+
+```bash
+kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8080:80
+cloudflared tunnel --url http://localhost:8080
+```
+
+**Causa:** o cabeçalho `Host` que a aplicação recebia não correspondia ao
+`NEXTAUTH_URL`. O `cloudflared` foi corrido com `--http-host-header quinta.localhost`
+para casar com a regra de host do Ingress, portanto a aplicação via
+`Host: quinta.localhost`, enquanto o `NEXTAUTH_URL` era o domínio do túnel.
+
+O NextAuth compara as duas coisas para se proteger contra *host header
+injection*, e quando divergem recusa estabelecer a sessão — silenciosamente.
+A defesa é legítima; a ausência de diagnóstico é que torna isto difícil.
+
+**Solução:** um Ingress adicional **sem `host`** (catch-all), que aceita
+qualquer cabeçalho `Host`, e correr o túnel sem o flag:
+
+```bash
+cloudflared tunnel --url http://localhost:8080
+```
+
+Assim o `Host` que chega à aplicação é o domínio do túnel, igual ao
+`NEXTAUTH_URL`.
+
+**Como diagnosticar da próxima vez:** quando a autenticação falha sem erro,
+comparar o `Host` efetivamente recebido com o que a aplicação espera.
+
+```bash
+kubectl logs -n ingress-nginx deploy/ingress-nginx-controller | tail -20
+kubectl exec -n quinta deploy/quinta-web -- env | grep NEXTAUTH
+```
+
+> Aplica-se a qualquer proxy à frente da aplicação — Cloudflare, ngrok, um
+> balanceador. Reescrever o `Host` é conveniente para encaminhar, e é
+> exatamente o que parte a autenticação.
+
+---
+
+### Workflow de documentação falha no `cache: pip`
+
+```
+Some specified paths were not resolved, unable to cache dependencies.
+```
+
+O `actions/setup-python` com `cache: pip` procura por omissão `requirements.txt`
+ou `pyproject.toml` na raiz. Neste repositório o ficheiro chama-se
+`requirements-docs.txt`, portanto não encontrava nada e falhava.
+
+```yaml
+- uses: actions/setup-python@v5
+  with:
+    python-version: '3.12'
+    cache: pip
+    cache-dependency-path: requirements-docs.txt
+```
+
+---
+
+### Depois de uma queda: o que o `kubectl` mostra não é o que está a acontecer
+
+Três armadilhas de diagnóstico, todas observadas na recuperação da queda de
+energia de 12/08/2026 (ver `docs/08-operacao.md`, secção 8.5).
+
+**1. O `AGE` do `kubectl get nodes` não é tempo de funcionamento.**
+
+Depois do reinício continuava a mostrar `38h`. Não é o nó que está a correr há
+38 horas — é a idade do **objeto `Node` no etcd**, que persiste em disco e
+sobrevive ao reinício. O objeto tem 38 horas; o processo tem segundos.
+
+Para tempo real de funcionamento:
+
+```bash
+docker ps --format "table {{.Names}}\t{{.Status}}"
+# k3d-alta-disponibilidade-server-0   Up 47 seconds
+```
+
+Ou, dentro do cluster:
+
+```bash
+kubectl get nodes -o custom-columns=NOME:.metadata.name,ARRANQUE:.status.nodeInfo.bootID
+uptime          # no host
+```
+
+Isto enganou-me a mim primeiro, e é o tipo de detalhe que faz perder meia hora
+a investigar a coisa errada.
+
+**2. `Ready` pode ser o último estado conhecido, não o atual.**
+
+Logo após o arranque, o `kubectl get nodes` dava os três nós como `Ready`
+quando o `agent-0` ainda estava a reiniciar.
+
+O control plane só marca um nó como `NotReady` ao fim de cerca de **40
+segundos** sem receber heartbeat do kubelet. Nessa janela, o que o `kubectl`
+devolve é o último estado que conhecia — não a realidade.
+
+Consequência prática: nos primeiros minutos depois de uma queda, confirmar o
+estado pela camada de baixo (`docker ps`) antes de acreditar no `kubectl`.
+
+**3. Pods em `Unknown`.**
+
+Os pods do nó afetado passaram por `Unknown` antes de voltarem. Não significa
+que o pod falhou nem que a aplicação teve erro: significa que o **control plane
+perdeu contacto com o kubelet** que o gere e deixou de saber o que lhe
+aconteceu.
+
+`Unknown` é ausência de informação, não uma falha diagnosticada. O control
+plane não pode assumir que o pod morreu — pode estar a servir tráfego
+normalmente num nó que apenas ficou incomunicável. Por isso não o substitui de
+imediato: espera, e só depois de o nó ser dado como perdido é que os pods são
+reagendados.
+
+Distinguir dos outros estados:
+
+| Estado | Significa |
+|---|---|
+| `CrashLoopBackOff` | o container arranca e morre — problema da aplicação |
+| `Pending` | não foi agendado — falta de recursos, PVC, taints |
+| `Unknown` | o control plane não sabe — problema de comunicação com o nó |
+
+---
+
 ## Registo pessoal
 
 | Data | Problema | Causa | Solução | Tempo perdido |
@@ -190,3 +320,7 @@ na etapa de build (`RUN mkdir -p /app/public`). Em alternativa, criar
 | 11/08/2026 | `prisma migrate dev` com P1017 | base de dados sombra força o fecho das ligações e mata o port-forward | `prisma db push`; `shadowDatabaseUrl` fica pendente | |
 | 11/08/2026 | Build da Quinta falhava no `COPY /app/public` | a aplicação não tem pasta `public/` | `mkdir -p /app/public` na etapa de build | |
 | 11/08/2026 | Aplicação com `E57P01` depois de recriar o `postgres-0` | pool com ligações mortas; port-forward preso ao pod antigo | reinício manual do port-forward e do servidor de dev | |
+| 11/08/2026 | Login preso em "A entrar...", **sem erro nenhum** | `Host` reescrito pelo `--http-host-header` do cloudflared não coincidia com o `NEXTAUTH_URL` | Ingress catch-all sem `host` e túnel sem o flag | |
+| 11/08/2026 | Workflow `docs.yml` falhava no `cache: pip` | o `setup-python` procura `requirements.txt`; o ficheiro chama-se `requirements-docs.txt` | `cache-dependency-path: requirements-docs.txt` | |
+| 12/08/2026 | Queda de energia com o cluster a correr | falha elétrica, desktop sem bateria | recuperação autónoma em ~5 min, sem intervenção; ver doc 08, secção 8.5 | 0 (nada a fazer) |
+| 12/08/2026 | `AGE` dos nós mostrava 38h depois do reinício | é a idade do objeto `Node` no etcd, não tempo de funcionamento | usar `docker ps` para uptime real | |

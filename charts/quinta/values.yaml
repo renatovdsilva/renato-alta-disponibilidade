@@ -1,8 +1,15 @@
 replicaCount: 2
 
+# Mesmos nomes que os manifests de k8s/base, para não haver dois conjuntos de
+# objetos a servir a mesma aplicação quando o ArgoCD assumir a gestão.
+fullnameOverride: quinta-web
+
 image:
   repository: quinta-calvario
   tag: "1.0.0"
+  # IfNotPresent é obrigatório aqui: a imagem NÃO está em registo nenhum.
+  # Foi importada para os nós com `k3d image import`. Com Always, o kubelet
+  # tentaria puxá-la de um registo remoto e ficaria em ImagePullBackOff.
   pullPolicy: IfNotPresent
 
 service:
@@ -26,6 +33,25 @@ ingress:
   enabled: true
   className: nginx
   host: quinta.localhost
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  # Ingress adicional sem `host`, que aceita qualquer cabeçalho Host.
+  # Necessário para o acesso por túnel (cloudflared): com uma regra de host
+  # fixa, o Host que chega à aplicação teria de ser reescrito, e isso parte o
+  # login do NextAuth em silêncio. Ver docs/09-troubleshooting.md.
+  catchAll: true
+
+# Espelha o securityContext dos manifests de k8s/base. Sem isto, o chart
+# faria o deployment regredir para menos restrições do que já estava a correr.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop: ["ALL"]
 
 resources:
   requests:

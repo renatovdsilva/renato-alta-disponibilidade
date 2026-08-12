@@ -19,66 +19,231 @@ Com GitOps, o estado desejado está no Git e o ArgoCD encarrega-se de o fazer co
 ```bash
 kubectl create namespace argocd
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-kubectl wait --for=condition=available deployment --all -n argocd --timeout=300s
+kubectl -n argocd rollout status deploy/argocd-server --timeout=300s
+kubectl -n argocd get pods
 ```
 
-Password inicial:
+Password inicial do `admin`:
 
 ```bash
 kubectl -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath="{.data.password}" | base64 -d; echo
 ```
 
-Aceder:
+Aceder à UI:
 
 ```bash
-kubectl port-forward svc/argocd-server -n argocd 8080:443
+kubectl port-forward svc/argocd-server -n argocd 8081:443
 ```
 
-`https://localhost:8080` — utilizador `admin`.
+`https://localhost:8081` — utilizador `admin`.
 
-> Mudar a password e apagar o secret inicial:
-> ```bash
-> kubectl -n argocd delete secret argocd-initial-admin-secret
-> ```
+> **Porta 8081, não 8080.** A 8080 está a ser usada pelo port-forward do
+> Ingress (secção 4.7). Duas ligações à mesma porta local não coexistem.
+
+> **`https`, não `http`.** O `argocd-server` serve TLS com certificado
+> autoassinado; o browser vai avisar. É esperado num cluster local.
+
+Depois de entrar, mudar a password e apagar o secret inicial:
+
+```bash
+kubectl -n argocd delete secret argocd-initial-admin-secret
+```
+
+### Alternativa: expor por Ingress
+
+Só vale a pena se o port-forward incomodar. O `argocd-server` fala HTTPS, e o
+Ingress NGINX por omissão fala HTTP com o backend — sem uma das duas
+configurações abaixo, o resultado é um ciclo de redirecionamentos:
+
+- anotação `nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"` no Ingress, ou
+- pôr o servidor em modo inseguro (`server.insecure: "true"` no ConfigMap
+  `argocd-cmd-params-cm`) e deixar o TLS para o Ingress.
+
+Neste laboratório ficou-se pelo port-forward: menos peças, e o ArgoCD não
+precisa de estar acessível a partir do exterior.
 
 ---
 
-## 7.3 Application
+## 7.3 Pré-requisitos que o ArgoCD **não** resolve
 
-Ficheiro: [`argocd/quinta-application.yaml`](https://github.com/renatovdsilva/renato-alta-disponibilidade/blob/main/argocd/quinta-application.yaml)
+Isto é a parte que costuma correr mal na primeira tentativa. O ArgoCD aplica
+manifests a partir do Git — não constrói imagens, não cria segredos, não
+inventa o que não está lá.
+
+| Pré-requisito | Porque não vem do Git | Se faltar |
+|---|---|---|
+| Secret `quinta-db` no namespace `quinta` | decisão D7: nenhum segredo no repositório | pods em `CreateContainerConfigError` |
+| PostgreSQL a correr (`k8s/base/13` e `14`) | o chart cobre só a aplicação | pods arrancam mas falham a readiness |
+| Imagem `quinta-calvario:1.0.0` nos nós | não está em registo nenhum | `ImagePullBackOff` |
+
+**A imagem é o ponto mais importante.** Foi construída localmente e importada
+com `k3d image import` — não existe num registo de onde o cluster a possa
+puxar. Por isso o chart usa `imagePullPolicy: IfNotPresent`: o kubelet usa a
+cópia que já está no nó e não tenta ir buscar nada.
+
+```bash
+# confirmar que a imagem está nos nós antes de sincronizar
+k3d image import quinta-calvario:1.0.0 -c alta-disponibilidade
+```
+
+Consequência para o fluxo GitOps: **um commit que mude a tag da imagem não
+chega**. É preciso construir e importar a nova tag primeiro, senão o ArgoCD
+sincroniza para uma imagem que nenhum nó tem. Enquanto não houver registo, o
+GitOps aqui é completo para configuração e parcial para imagens — e isso deve
+ser dito assim, não escondido.
+
+> `imagePullPolicy: Never` seria ainda mais explícito, ao proibir qualquer
+> tentativa de download. Ficou `IfNotPresent` para o chart continuar a
+> funcionar sem alterações no dia em que houver registo.
+
+---
+
+## 7.4 O conflito dos dois donos
+
+A Quinta já está a correr, aplicada com `kubectl apply -f k8s/base/`. Se o
+ArgoCD passar a geri-la pelo chart, os mesmos objetos passam a ter duas fontes
+de verdade.
+
+O chart foi alinhado para produzir **exatamente os mesmos nomes** dos manifests
+base (`fullnameOverride: quinta-web`) — sem isso, uma release chamada `quinta`
+geraria `quinta-quinta` e ficariam dois conjuntos de objetos a servir a mesma
+aplicação, com dois Ingress a disputar o mesmo host.
+
+Mas os nomes iguais não bastam. Há uma diferença que impede a adoção direta:
+
+| | `k8s/base` | chart |
+|---|---|---|
+| `spec.selector.matchLabels` | `app.kubernetes.io/name: quinta-web` | `name: quinta` + `instance: <release>` |
+
+**O `selector` de um Deployment é imutável.** Aplicar o chart por cima do
+Deployment existente falha com `field is immutable`. Não é uma questão de
+esperar mais tempo nem de forçar o sync.
+
+### Resolução recomendada: apagar e deixar o ArgoCD criar
+
+Apagam-se **apenas** os objetos da aplicação. O namespace, o Postgres, o PVC e
+o Secret ficam intactos — os dados não são tocados.
+
+```bash
+# 1) confirmar o que vai ser apagado
+kubectl get deploy,svc,ingress -n quinta
+
+# 2) apagar só a aplicação (NÃO apagar o statefulset, o pvc nem o secret)
+kubectl delete deployment quinta-web -n quinta
+kubectl delete service quinta-web -n quinta
+kubectl delete ingress quinta-web -n quinta
+# se tiveres criado o Ingress catch-all à mão, apaga-o também —
+# o chart passa a criá-lo (ingress.catchAll: true)
+kubectl get ingress -n quinta
+
+# 3) deixar o ArgoCD criar tudo de novo
+kubectl apply -f argocd/
+kubectl -n argocd get application quinta -w
+```
+
+A aplicação fica indisponível durante alguns segundos, entre o `delete` e o
+primeiro sync. Num laboratório é aceitável; em produção far-se-ia com uma
+janela de manutenção ou com a alternativa abaixo.
+
+### Alternativa: adoção sem downtime
+
+Alterar `quinta.selectorLabels` no `_helpers.tpl` para emitir exatamente
+`app.kubernetes.io/name: quinta-web`, igual ao dos manifests base. Com o
+selector coincidente, o ArgoCD aplica por cima e adota os objetos existentes,
+sem os recriar.
+
+Custo: o `selectorLabels` deixa de incluir `app.kubernetes.io/instance`, o que
+impede duas releases do mesmo chart no mesmo namespace. Aqui não é limitação
+nenhuma — dev e prod usam namespaces diferentes — mas afasta-se da convenção
+dos charts Helm, e por isso ficou como alternativa e não como recomendação.
+
+### E depois: parar de aplicar à mão
+
+A partir do momento em que o ArgoCD gere a aplicação, `k8s/base/10`, `11` e
+`12` deixam de ser aplicados. Continuam no repositório como referência e como
+base do overlay de desenvolvimento, mas quem os aplicar à mão volta a criar o
+conflito. As bases de dados (`13`, `14`, `30`–`32`) continuam por `kubectl` até
+haver uma Application para elas.
+
+---
+
+## 7.5 Aplicar a Application
 
 ```bash
 kubectl apply -f argocd/
+kubectl -n argocd get applications
+argocd app get quinta        # se tiveres a CLI instalada
 ```
 
-Pontos importantes da definição:
+Pontos importantes da definição em
+[`argocd/quinta-application.yaml`](https://github.com/renatovdsilva/renato-alta-disponibilidade/blob/main/argocd/quinta-application.yaml):
 
-- `syncPolicy.automated.prune: true` — apagar do Git apaga do cluster
-- `selfHeal: true` — alterações manuais no cluster são revertidas
-- `CreateNamespace=true` — o namespace é criado se não existir
+- `repoURL` aponta para o repositório **público** — não são precisas
+  credenciais no ArgoCD
+- `path: charts/quinta`, `valueFiles: [values-prod.yaml]` — o caminho dos
+  values é relativo à pasta do chart
+- `prune: true` — apagar do Git apaga do cluster
+- `selfHeal: true` — alterações manuais são revertidas
+- `CreateNamespace=true` — inofensivo, o namespace já existe
 
 ---
 
-## 7.4 Fluxo de trabalho a partir daqui
+## 7.6 Fluxo de trabalho a partir daqui
 
 ```
 alterar values.yaml → git commit → git push → ArgoCD sincroniza → cluster atualizado
 ```
 
-Nunca mais `kubectl apply` em produção. Se for preciso alterar alguma coisa, altera-se no Git.
+Nunca mais `kubectl apply` para a aplicação. Se for preciso alterar alguma
+coisa, altera-se no Git.
+
+Por omissão o ArgoCD verifica o repositório a cada **3 minutos**. Para não
+esperar, forçar pela UI (*Refresh* / *Sync*) ou pela CLI:
+
+```bash
+argocd app sync quinta
+```
 
 ---
 
-## 7.5 Demonstração de self-heal
+## 7.7 Demonstração de self-heal
+
+O teste que mostra a diferença entre "aplicar YAML" e GitOps.
 
 ```bash
+# terminal 1 — observar
+kubectl get pods -n quinta -w
+
+# terminal 2 — provocar drift à mão
 kubectl scale deployment quinta-web -n quinta --replicas=5
-# esperar ~1 minuto
-kubectl get pods -n quinta
+kubectl get deploy quinta-web -n quinta      # 5 réplicas, por instantes
 ```
 
-O ArgoCD repõe o valor definido no Git. **Registar o tempo até à correção.**
+O ArgoCD deteta que o cluster já não corresponde ao Git e repõe as 2 réplicas
+definidas em `values-prod.yaml`. **Cronometrar** desde o `scale` até o
+`kubectl get deploy` voltar a mostrar 2, e registar em `docs/11-metricas.md`.
+
+Segunda variante, mais convincente porque não é um simples número:
+
+```bash
+# alterar a imagem à mão para uma tag que não existe
+kubectl set image deployment/quinta-web web=quinta-calvario:9.9.9 -n quinta
+```
+
+O ArgoCD repõe a tag do Git antes de os pods novos chegarem a falhar — e o
+histórico da UI mostra quem alterou o quê.
+
+Para provar o contrário (que o self-heal está mesmo a fazer alguma coisa),
+desligá-lo e repetir:
+
+```bash
+kubectl -n argocd patch application quinta --type merge \
+  -p '{"spec":{"syncPolicy":{"automated":{"selfHeal":false}}}}'
+```
+
+Com `selfHeal: false`, a Application fica `OutOfSync` e o drift permanece —
+que é exatamente o estado em que vive um cluster gerido à mão.
 
 ---
 
@@ -86,5 +251,34 @@ O ArgoCD repõe o valor definido no Git. **Registar o tempo até à correção.*
 
 | Data | Ação | Observação |
 |---|---|---|
-| | ArgoCD instalado | |
-| | self-heal testado | tempo: |
+| 12/08/2026 | ArgoCD instalado | **v3.5.0**, manifests oficiais, namespace `argocd`. `deployment "argocd-server" successfully rolled out` |
+| 12/08/2026 | acesso à UI | `port-forward` 8081:443, https, `admin` com a password do secret inicial |
+| 12/08/2026 | conflito dos dois donos resolvido | apagados `deployment`, `service` e `ingress` `quinta-web`. StatefulSet, PVC e Secret **não** foram tocados — dados intactos |
+| 12/08/2026 | Application `quinta` criada | criada às 08:30:34, primeiro sync às 08:30:37 — **3 s** |
+| 12/08/2026 | recursos recriados pelo ArgoCD | **61 s** — Deployment 2/2, Service ClusterIP `10.43.65.52`, Ingress em `quinta.localhost` com os 3 IPs dos nós |
+| 12/08/2026 | estado da Application | `Healthy` + `Synced`, aplicação validada no browser |
+| 12/08/2026 | self-heal testado (réplicas) | `scale --replicas=5` revertido para 2 em **1–2 s** |
+| | self-heal testado (imagem) | |
+
+### Observações
+
+- **Estabilidade do cluster:** 3 nós `Ready` há **38 horas** sem falhas
+  (k3s v1.35.5), incluindo o período com o Postgres e a aplicação a correr.
+
+- **Aviso do `kubectl` ao aplicar a Application:**
+
+  ```
+  metadata.finalizers: "resources-finalizer.argocd.argoproj.io": prefer a domain-qualified finalizer name
+  ```
+
+  Cosmético. O Kubernetes recomenda finalizers com domínio próprio para evitar
+  colisões de nomes; este é o finalizer oficial do ArgoCD e funciona na mesma.
+  Não há nada a corrigir do nosso lado.
+
+- **O self-heal foi mais rápido do que a criação dos pods.** A sequência
+  observada — 2/5 com 5 desejadas, depois 2/2 com 5, depois 2/2 com 2 — mostra
+  que o ArgoCD repôs o valor antes de as réplicas extra chegarem a existir. A
+  alteração manual nunca se materializou em pods a correr.
+
+  É a demonstração concreta de que o estado desejado passou a viver no Git: já
+  não é o último `kubectl` a ganhar, é o repositório.
