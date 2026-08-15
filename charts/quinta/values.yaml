@@ -39,7 +39,10 @@ ingress:
   # Necessário para o acesso por túnel (cloudflared): com uma regra de host
   # fixa, o Host que chega à aplicação teria de ser reescrito, e isso parte o
   # login do NextAuth em silêncio. Ver docs/09-troubleshooting.md.
-  catchAll: true
+  # Desativado em 15/08/2026: com a DMZ do router ativa, um Ingress sem host
+  # responde a qualquer pedido que chegue ao IP público, expondo a aplicação
+  # a quem apenas acerte no endereço. Manter apenas regras com host explícito.
+  catchAll: false
 
 # Espelha o securityContext dos manifests de k8s/base. Sem isto, o chart
 # faria o deployment regredir para menos restrições do que já estava a correr.
