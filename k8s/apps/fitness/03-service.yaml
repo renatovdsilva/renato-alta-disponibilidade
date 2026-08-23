@@ -1,0 +1,20 @@
+# -----------------------------------------------------------------------------
+#  Service — ClusterIP simples.
+#  Só o Ingress fala com ele; não há NodePort nem LoadBalancer.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: fitnessphive
+  namespace: fitness
+  labels:
+    app.kubernetes.io/name: fitnessphive
+spec:
+  type: ClusterIP
+  selector:
+    app: fitnessphive
+  ports:
+    - name: http
+      port: 80
+      targetPort: http    # → 3004 no container
+      protocol: TCP

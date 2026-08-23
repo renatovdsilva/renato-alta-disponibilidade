@@ -70,10 +70,10 @@ O projeto está concluído quando todas estas afirmações forem verdadeiras:
 
 - [x] `kubectl get nodes` mostra três nós em `Ready` *(confirmado em 11/08/2026 — ver `02-cluster.md`)*
 - [ ] As duas aplicações respondem no browser através do Ingress *(Quinta sim, desde 11/08/2026; Briosa por construir)*
-- [ ] Matar um pod não interrompe o serviço, e isso está medido
-- [ ] O Grafana mostra métricas dos pods e dos nós
+- [x] Matar um pod não interrompe o serviço, e isso está medido *(13/08/2026 — perda de 1 réplica: **0 falhas em 300 pedidos**; destruição total: 19/600, 96,8%)*
+- [x] O Grafana mostra métricas dos pods e dos nós *(13/08/2026 — ver `06-monitorizacao.md`, 6.6)*
 - [ ] Um alerta dispara quando se provoca uma falha, com tempo registado
-- [ ] Um commit no Git provoca deploy automático sem intervenção
+- [x] Um commit no Git provoca deploy automático sem intervenção *(13/08/2026 — o push trocou `quinta-quinta` por `quinta-web` sem qualquer `kubectl`)*
 - [x] Alterar o cluster à mão é revertido pelo ArgoCD *(12/08/2026 — reposto em 1–2 s)*
 - [ ] `k3d cluster delete` seguido de `./scripts/bootstrap.sh` reconstrói tudo
 - [ ] O ficheiro `docs/11-metricas.md` está preenchido com números medidos
@@ -104,4 +104,5 @@ O projeto está concluído quando todas estas afirmações forem verdadeiras:
 | 11/08/2026 | 3 | | Node 20 instalado no Ubuntu (o `npm` era o do Windows). Quinta do Calvário executada pela primeira vez: `next.config.ts` → `.mjs`, variáveis do NextAuth, Prisma 5.22, seed e login funcionais. Migração SQLite → PostgreSQL (D9): Postgres 16.14 no cluster, `postgres-0` `1/1 Running`, PVC 2 Gi `Bound`, schema por `db push`, seed e login contra o cluster. Teste de persistência: pod destruído, `Ready` em 6 s, dados intactos. Imagem da Quinta de 3,4 GB para 282 MB (−92%). Briosa: estrutura real levantada, Dockerfile corrigido e manifests do MySQL escritos. | Migrações versionadas do Prisma (`shadowDatabaseUrl`); build e deploy da Briosa; aplicações ainda não estão a correr no cluster |
 | 11/08/2026 | 3 (cont.) | | Deploy da Quinta no cluster: imagem importada para os 3 nós em 6 s, `quinta-web` com 2 réplicas em nós diferentes, Service e Ingress aplicados, login funcional. Rolling update demonstrado 2× sem downtime. Acesso externo por túnel cloudflared, validado por outra pessoa noutra rede. Repositório publicado e GitHub Pages ativas. | Briosa por construir; migrações versionadas do Prisma |
 | 12/08/2026 | 6 | | ArgoCD v3.5.0 instalado. Quinta migrada de `kubectl apply` para GitOps: recursos antigos apagados (dados intactos), Application `Healthy`/`Synced`, primeiro sync em 3 s e recursos recriados em 61 s. Self-heal validado — `scale` manual revertido em 1–2 s. **Queda de energia real às 07:41**: cluster recuperou sozinho em ~5 min, sem intervenção e sem perda de dados. | Chart em produção ainda é a versão antiga do Git (nomes `quinta-quinta`); falta commit e push |
-| | 4 e 5 | | *(Helm e monitorização — o ArgoCD foi feito antes da ordem prevista)* | |
+| 13/08/2026 | 5 | | `kube-prometheus-stack` instalado sem erros, com valores versionados e PVC para Prometheus e Grafana. Sete regras de alerta, filtradas por namespace e não por nome. Primeira leitura real do consumo: ~38 MiB por réplica Next.js, ~20 MiB no Postgres, CPU a 1% dos requests. Ciclo GitOps completo validado: o push corrigiu os nomes dos recursos sem qualquer `kubectl`. | Cronometrar o alerta `PodCrashLooping`; medir requests sob carga; Briosa |
+| | 4 | | *(Helm — o chart já está em uso pelo ArgoCD; falta fechar o doc 05)* | |

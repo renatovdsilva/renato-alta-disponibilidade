@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: fitness
+
+# ATENÇÃO: `kubectl apply -k .` aplica TUDO de uma vez, incluindo o Ingress.
+# Na PRIMEIRA instalação não uses isto — segue o MIGRACAO.md, que sobe o Pod
+# sem Ingress para poderes semear os dados antes de a app receber escritas.
+# O `-k` é para depois, no dia-a-dia.
+#
+# O 05-clusterissuer.yaml não está aqui de propósito: é cluster-scoped e
+# depende do cert-manager estar instalado. Aplica-se à parte.
+resources:
+  - 00-namespace.yaml
+  - 01-pvc.yaml
+  - 02-deployment.yaml
+  - 03-service.yaml
+  - 04-ingress.yaml
+
+commonLabels:
+  app.kubernetes.io/name: fitnessphive
+  app.kubernetes.io/part-of: fitness
+
+images:
+  - name: fitnessphive
+    newTag: 0.1.0

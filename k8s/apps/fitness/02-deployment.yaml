@@ -1,0 +1,103 @@
+# -----------------------------------------------------------------------------
+#  Deployment do FitnessPHIVE
+#
+#  === PORQUÊ replicas: 1 E strategy: Recreate ===
+#
+#  A persistência desta aplicação é EM FICHEIRO, não numa base de dados de rede:
+#  um ficheiro SQLite (data/fitlog.db) e dois ficheiros JSON (treinos.json,
+#  cargas.json) escritos com fs.writeFileSync. Isto tem duas consequências:
+#
+#  1) replicas: 1
+#     SQLite em ficheiro só aguenta um processo escritor. E os JSON são escritos
+#     com read-modify-write sem lock nenhum — dois Pods a gravar cargas.json ao
+#     mesmo tempo perdem registos silenciosamente (o último a escrever ganha).
+#     Além disso o PVC é ReadWriteOnce: um segundo Pod noutro nó nem arrancava.
+#
+#  2) strategy: Recreate (em vez do RollingUpdate por omissão)
+#     Num RollingUpdate o Pod novo sobe ANTES de o velho morrer. Com um volume
+#     RWO isso dá deadlock (o volume já está preso ao nó do Pod antigo) e, se
+#     ambos chegassem a correr, teríamos dois escritores no mesmo ficheiro
+#     SQLite — exatamente o que a nota 1 proíbe. Recreate mata primeiro, sobe
+#     depois: há uns segundos de downtime, o que numa app de treino pessoal é
+#     irrelevante.
+#
+#  Se um dia isto passar para o PostgreSQL do cluster, ambas as restrições caem.
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fitnessphive
+  namespace: fitness
+  labels:
+    app.kubernetes.io/name: fitnessphive
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: fitnessphive
+  template:
+    metadata:
+      labels:
+        app: fitnessphive
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000        # utilizador `node` da imagem oficial
+        runAsGroup: 1000
+        fsGroup: 1000          # garante que o PVC fica escrevível pelo `node`
+      containers:
+        - name: fitnessphive
+          image: fitnessphive:0.1.0
+          # Imagem local importada com `k3d image import` — nunca ir buscar ao registry.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3004
+          env:
+            # Porta HTTP interna. O TLS termina no Ingress, não aqui.
+            - name: PORT
+              value: "3004"
+            # Desliga o listener HTTPS da app (ver deploy/patches/).
+            - name: ENABLE_HTTPS
+              value: "0"
+            # Desliga o warmup de imagens no arranque: os gifs já vêm na imagem
+            # e o warmup faria pedidos ao raw.githubusercontent.com a cada boot.
+            - name: WARMUP
+              value: "0"
+            - name: NODE_ENV
+              value: "production"
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            # NOTA: readOnlyRootFilesystem fica FALSE de propósito.
+            # O handler /api/gif escreve em /app/gifs_cache quando encontra um
+            # exercício sem imagem em cache. Com rootfs read-only isso rebentava.
+            readOnlyRootFilesystem: false
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: fitness-data

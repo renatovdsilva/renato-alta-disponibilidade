@@ -1,0 +1,121 @@
+# Ingress para as ferramentas da plataforma — ArgoCD, Grafana e Prometheus.
+#
+# Substitui os `kubectl port-forward`, que já falharam de quatro maneiras
+# diferentes neste projeto (ver docs/08-operacao.md, secção 8.6).
+#
+# PORQUÊ FORA DE k8s/base/: o `scripts/bootstrap.sh` faz
+# `kubectl apply -f k8s/base/`, e estes objetos vivem nos namespaces `argocd` e
+# `monitoring`, que não existem nessa altura. Aplicados em bloco com os
+# restantes, o bootstrap falharia. Ficam à parte, aplicados depois de as
+# ferramentas estarem instaladas.
+#
+# Aplicar:
+#   kubectl apply -f k8s/platform/ingress-plataforma.yaml
+#
+# PRÉ-REQUISITO para o ArgoCD (uma vez):
+#   kubectl -n argocd patch configmap argocd-cmd-params-cm --type merge \
+#     -p '{"data":{"server.insecure":"true"}}'
+#   kubectl -n argocd rollout restart deploy/argocd-server
+---
+# ---------------------------------------------------------------------------
+# ArgoCD — argocd.localhost
+# ---------------------------------------------------------------------------
+# O argocd-server serve HTTPS com certificado autoassinado e, por omissão,
+# redireciona HTTP para HTTPS. Atrás de um Ingress que fala HTTP com o backend,
+# isso dá um ciclo de redirecionamentos (ERR_TOO_MANY_REDIRECTS).
+#
+# Duas saídas possíveis:
+#
+#   a) anotação `nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"` — o
+#      NGINX fala HTTPS com o backend e aceita o certificado autoassinado;
+#   b) pôr o servidor em modo inseguro (`server.insecure: "true"`) e deixar o
+#      NGINX falar HTTP com ele.
+#
+# **Escolhida a (b).** Razão: neste laboratório o Ingress não termina TLS —
+# o acesso é `http://argocd.localhost` em loopback. Com a opção (a), o troço
+# browser→NGINX ia em HTTP na mesma e só o troço NGINX→ArgoCD ia cifrado, o que
+# não protege nada e acrescenta uma camada de certificados autoassinados a
+# depurar. Além disso a CLI do ArgoCD usa gRPC, que com backend HTTPS exige
+# ainda a anotação `backend-protocol: "GRPC"` num Ingress separado.
+#
+# Em produção a escolha seria a oposta: TLS terminado no Ingress com
+# cert-manager, e o servidor em modo inseguro **apenas** por trás dele — que é,
+# aliás, a montagem recomendada pelo próprio ArgoCD.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: alta-disponibilidade
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: argocd.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 80
+---
+# ---------------------------------------------------------------------------
+# Grafana — grafana.localhost
+# ---------------------------------------------------------------------------
+# Domínio próprio na raiz, e não um subcaminho. É deliberado: com subcaminho
+# (ex.: /grafana) seria preciso `serve_from_sub_path` além do `root_url`, e
+# vários painéis e redirecionamentos partem-se por causa de caminhos absolutos.
+# Um domínio por ferramenta evita a classe inteira de problemas.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: alta-disponibilidade
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: grafana.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: monitoring-grafana
+                port:
+                  number: 80
+---
+# ---------------------------------------------------------------------------
+# Prometheus — prometheus.localhost
+# ---------------------------------------------------------------------------
+# Sem autenticação nenhuma: o Prometheus não a traz e este Ingress não a
+# acrescenta. Aceitável num cluster local em loopback; inaceitável no dia em
+# que o cluster deixe de estar só na máquina. Nessa altura: autenticação
+# básica no Ingress (`auth-type: basic`) ou um proxy à frente.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: alta-disponibilidade
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: prometheus.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: monitoring-kube-prometheus-prometheus
+                port:
+                  number: 9090

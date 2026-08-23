@@ -127,20 +127,162 @@ Se não resolver, acrescentar ao ficheiro `C:\Windows\System32\drivers\etc\hosts
 
 ## 4.5 Teste de resiliência
 
-Este teste é o que se conta em entrevista.
+Este teste é o que se conta em entrevista. Feito em 13/08/2026.
+
+### A primeira tentativa produziu números falsos
+
+O método inicial era o óbvio: um ciclo de `curl` a partir do WSL contra o
+`kubectl port-forward` do Ingress, com o cabeçalho `Host: quinta.localhost`.
+
+**Resultado: 115 falhas em 290 pedidos — sem nenhuma falha provocada.**
+
+A verificação salvou o teste. Cinco pedidos manuais devolveram
+`307 307 307 307 307`: a aplicação estava perfeitamente saudável. Os 40% de
+"falhas" eram do instrumento de medida.
+
+O `kubectl port-forward` não aguenta ligações sucessivas rápidas. É um túnel
+de desenvolvimento — um processo em Go a multiplexar sobre uma ligação à API
+do Kubernetes — não um proxy dimensionado para carga. Já tinha morrido na
+queda de energia (secção 8.5 do doc 08) e ficado preso a um pod destruído
+(secção 4.6); agora falseia medições.
+
+> **Regra:** nunca medir disponibilidade nem desempenho através de um
+> `port-forward`. O que se mede é o túnel, não a aplicação.
+
+Se os números de um teste parecerem maus, verificar primeiro o instrumento.
+Um resultado mau que não se consegue reproduzir à mão é quase sempre erro de
+medição.
+
+### Método correto: gerar carga dentro do cluster
+
+O gerador passa a correr como pod, a bater diretamente no Service — sem
+túneis, sem Ingress, sem a rede do Windows pelo meio:
 
 ```bash
-# terminal 1 — observar
+# terminal 1 — gerador de carga dentro do cluster
+kubectl run loadgen -n quinta --rm -it --restart=Never \
+  --image=curlimages/curl -- sh -c '
+    ok=0; fail=0
+    for i in $(seq 1 600); do
+      if curl -s -o /dev/null --max-time 2 http://quinta-web/; then
+        ok=$((ok+1))
+      else
+        fail=$((fail+1))
+      fi
+      echo "$i ok=$ok fail=$fail"
+      sleep 0.2
+    done'
+
+# terminal 2 — observar
 kubectl get pods -n quinta -w
 
-# terminal 2 — matar um pod
-kubectl delete pod -n quinta -l app=quinta-web --field-selector status.phase=Running
-
-# terminal 3 — verificar que o site continua a responder
-while true; do curl -s -o /dev/null -w "%{http_code}\n" http://quinta.localhost; sleep 1; done
+# terminal 3 — provocar a falha
+kubectl -n quinta delete pod -l app.kubernetes.io/name=quinta --wait=false
 ```
 
-**Registar:** quantos pedidos falharam durante a substituição do pod.
+600 pedidos, um a cada 0,2 s, com timeout de 2 s.
+
+### Resultado
+
+| Métrica | Valor |
+|---|---|
+| Pedidos | 600 |
+| Falhas | **19** |
+| Disponibilidade | **96,8%** |
+| Janela sem servir | ~3,5 a 4 s |
+| Intervenção manual | nenhuma |
+
+Progressão observada:
+
+| Pedido | Falhas acumuladas |
+|---|---|
+| 150 | 0 |
+| 175 | 8 |
+| 200 | 18 |
+| 200–475 | 18 (estável) |
+| 475 | 19 |
+
+As 18 falhas concentram-se numa janela contínua de cerca de 18 pedidos a 0,2 s
+— entre a destruição e os substitutos ficarem `Ready`. A falha isolada ao
+pedido 475 ultrapassou o timeout de 2 s e é provavelmente arranque a frio de
+uma rota do Next, sem relação com o teste.
+
+### O que este teste foi, na verdade
+
+**O seletor apanhou as duas réplicas, não uma.** O
+`-l app.kubernetes.io/name=quinta` corresponde a ambos os pods, portanto a
+aplicação foi destruída por completo, não parcialmente.
+
+Isto tem de ser dito com clareza, porque muda o significado do número: **não é
+um teste de perda de uma réplica, é de destruição total sob carga.** Descrevê-lo
+como perda parcial seria vender 96,8% de disponibilidade num cenário em que se
+esperaria praticamente 100%.
+
+Assim descrito, o resultado é mais forte, não mais fraco: a aplicação inteira
+foi ao chão sob carga contínua e recuperou sozinha em menos de 4 segundos,
+perdendo 3,2% dos pedidos.
+
+### Segundo teste: perda de uma réplica — 0 falhas em 300 pedidos
+
+Mesmo método, mesma cadência (0,2 s, timeout de 2 s), 300 pedidos. A diferença
+está na falha provocada: **um único pod, apagado pelo nome**, com a segunda
+réplica a servir.
+
+```bash
+kubectl get pods -n quinta
+kubectl -n quinta delete pod quinta-web-6d6946d8cb-5d9cb --wait=false
+```
+
+| Métrica | Valor |
+|---|---|
+| Pedidos | 300 |
+| Falhas | **0** |
+| Disponibilidade | **100%** |
+
+Nenhum pedido perdido em momento nenhum — nem durante a terminação do pod, nem
+durante o arranque do substituto.
+
+**Este é o cenário que corresponde à realidade operacional:** rolling updates,
+drain de um nó para manutenção, falha isolada de um pod. Com uma réplica
+saudável a servir, o Service redistribui o tráfego e o utilizador não dá por
+nada.
+
+### O que os dois testes provam em conjunto
+
+O segundo teste é a explicação do primeiro. As 19 falhas da destruição total
+não vinham de má configuração do Deployment nem do Service — vinham de **não
+haver nenhum pod vivo para servir**. Nenhuma configuração resolve isso; é
+aritmética.
+
+| Cenário | Pedidos | Falhas | Disponibilidade |
+|---|---|---|---|
+| Perda de uma réplica | 300 | 0 | 100% |
+| Destruição de todas as réplicas | 600 | 19 | 96,8% |
+
+Isolar as variáveis foi o que deu valor ao par: um teste sozinho dava um número
+sem explicação, os dois juntos mostram exatamente onde está o limite da
+redundância. E confirmam a razão de ser da decisão D3 — duas réplicas não são
+enfeite, são a diferença entre 100% e 96,8%.
+
+O `preStop` e o encerramento gracioso (doc 10) continuam a valer a pena: numa
+perda parcial já não há nada a ganhar, mas reduzem a janela numa destruição
+total e protegem contra o caso em que as duas réplicas caem quase em simultâneo,
+por exemplo por falha de um nó.
+
+### Porque é que houve falhas de todo
+
+Mesmo com destruição total, parte das falhas é evitável. Quando um pod entra em
+terminação, duas coisas acontecem **em paralelo, não em série**:
+
+1. o kubelet envia `SIGTERM` ao container
+2. o endpoint é removido do Service e propagado a cada nó
+
+Nada garante que a segunda termine antes da primeira. Durante essa janela o
+Service ainda encaminha tráfego para um pod que já está a fechar — e esses
+pedidos falham.
+
+Mitigações, em `docs/10-decisoes.md` (trabalho futuro): um `preStop` com uma
+espera curta, e encerramento gracioso na aplicação.
 
 ---
 
@@ -270,4 +412,6 @@ kubectl rollout undo deployment/quinta-web -n quinta
 | 11/08/2026 | primeiro deploy da Quinta | `quinta-web` com 2 réplicas, agendadas em **nós diferentes** (agent-0 e agent-1). Service e Ingress aplicados, aplicação acessível e login funcional |
 | 11/08/2026 | rolling update (2×) | `kubectl rollout restart` — sempre com uma réplica a servir, **zero downtime** |
 | 11/08/2026 | acesso externo | túnel cloudflared sobre o Ingress; testado com sucesso por outra pessoa, de outra rede |
-| | teste de resiliência das aplicações | pedidos falhados: |
+| 13/08/2026 | teste de resiliência sob carga | destruição das **duas** réplicas: **19 falhas em 600 pedidos** (96,8%), janela de ~4 s, recuperação automática |
+| 13/08/2026 | primeira tentativa do mesmo teste | inválida — 115 falhas em 290 sem falha provocada, causadas pelo `port-forward`. Ver 4.5 |
+| 13/08/2026 | teste com perda de **uma** réplica | **0 falhas em 300 pedidos — 100%**, sem qualquer interrupção percetível |

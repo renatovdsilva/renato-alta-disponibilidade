@@ -1,0 +1,134 @@
+# ═════════════════════════════════════════════════════════════════════════════
+# PostgreSQL — StatefulSet próprio do RenatoTrack
+#
+# PORQUE StatefulSet E NÃO Deployment:
+#   · identidade estável: o pod é sempre renatotrack-postgres-0, com o mesmo
+#     nome DNS e o mesmo volume, reinício após reinício;
+#   · o volumeClaimTemplate liga o PVC ao pod-0 para sempre — um Deployment com
+#     um PVC partilhado não garante isso;
+#   · o arranque e a paragem são ordenados, o que interessa no dia em que
+#     houver uma réplica de leitura.
+#
+# Continua a ser UMA réplica. Um StatefulSet com replicas: 2 não faz
+# replicação — daria dois Postgres independentes, cada um com a sua base de
+# dados e metade dos dados. Replicação a sério exige streaming replication
+# (CloudNativePG, Patroni, Zalando operator). É o passo seguinte, não este.
+# A diferença face aos ficheiros JSON é que AGORA a aplicação pode ter várias
+# réplicas, porque o estado saiu dos pods da aplicação.
+# ═════════════════════════════════════════════════════════════════════════════
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: renatotrack-postgres
+  namespace: renatotrack
+  labels:
+    app.kubernetes.io/name: renatotrack-postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: renatotrack
+spec:
+  serviceName: renatotrack-postgres   # tem de ser o Service headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: renatotrack-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: renatotrack-postgres
+        app.kubernetes.io/component: database
+    spec:
+      # Uma paragem a meio de um checkpoint deixa a base de dados a recuperar
+      # no arranque seguinte. 60 s dá tempo ao shutdown limpo.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        # 999 é o uid do utilizador `postgres` na imagem oficial.
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom: { secretKeyRef: { name: renatotrack-postgres, key: POSTGRES_DB } }
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: renatotrack-postgres, key: POSTGRES_USER } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: renatotrack-postgres, key: POSTGRES_PASSWORD } }
+            # ─────────────────────────────────────────────────────────────────
+            # PGDATA numa SUBPASTA do volume. Não é preciosismo: o
+            # local-path do k3d (como qualquer volume que traga um lost+found
+            # ou ficheiros de metadados) deixa a raiz do mount "não vazia", e
+            # o initdb recusa-se a inicializar uma pasta não vazia. Sem esta
+            # linha o pod fica em CrashLoopBackOff no primeiro arranque.
+            # ─────────────────────────────────────────────────────────────────
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            # Checksums só se podem ligar na criação do cluster. Detetam
+            # corrupção silenciosa de disco — que é exatamente o tipo de avaria
+            # que se descobre tarde de mais, quando os backups já a copiaram.
+            - name: POSTGRES_INITDB_ARGS
+              value: "--data-checksums"
+            # scram-sha-256 (o default do PG 14+) explícito, para o dia em que
+            # esta base de dados deixar de ser só local.
+            - name: POSTGRES_HOST_AUTH_METHOD
+              value: scram-sha-256
+          volumeMounts:
+            - name: dados
+              mountPath: /var/lib/postgresql/data
+          # ─── Sondas ──────────────────────────────────────────────────────
+          # pg_isready e não um TCP check: a porta 5432 abre bastante antes de
+          # a base de dados aceitar queries, sobretudo no primeiro arranque
+          # (initdb + criação da base). Um TCP check dava "pronto" cedo demais
+          # e a migração falhava.
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -h 127.0.0.1"]
+            periodSeconds: 5
+            failureThreshold: 30      # até 2,5 min para o initdb inicial
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -h 127.0.0.1"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -h 127.0.0.1"]
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5       # tolerante: reiniciar um Postgres por
+                                      # causa de uma lentidão passageira é pior
+                                      # do que esperar mais 30 segundos
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+              # Sem limite de CPU: throttling do Postgres traduz-se em queries
+              # lentas e timeouts na aplicação, difíceis de diagnosticar.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # O volume da base de dados. Ao contrário de um `volumes:` normal, isto cria
+  # um PVC por réplica, com nome previsível
+  # (dados-renatotrack-postgres-0) e que SOBREVIVE à eliminação do
+  # StatefulSet. Apagar o StatefulSet não apaga os dados — para os apagar é
+  # preciso apagar o PVC de propósito. É a rede de segurança que se quer.
+  # ───────────────────────────────────────────────────────────────────────────
+  volumeClaimTemplates:
+    - metadata:
+        name: dados
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+        # storageClassName: local-path   # default do k3d

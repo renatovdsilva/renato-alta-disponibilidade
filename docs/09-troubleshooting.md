@@ -156,6 +156,30 @@ o Service para um pod no momento em que arranca e fica agarrado a esse.
 
 ---
 
+### Medições através de `port-forward` dão números falsos
+
+Um teste de disponibilidade com `curl` em ciclo contra um
+`kubectl port-forward` deu **115 falhas em 290 pedidos — sem qualquer falha
+provocada**. Cinco pedidos manuais a seguir devolveram `307 307 307 307 307`:
+a aplicação estava saudável.
+
+O `port-forward` é um processo a multiplexar ligações sobre a API do
+Kubernetes. Não foi feito para ligações sucessivas rápidas e começa a
+recusá-las muito antes de a aplicação sentir seja o que for.
+
+**Nunca medir disponibilidade, latência ou débito através de um port-forward.**
+O gerador de carga tem de correr dentro do cluster:
+
+```bash
+kubectl run loadgen -n <ns> --rm -it --restart=Never \
+  --image=curlimages/curl -- sh -c 'for i in $(seq 1 100); do curl -s -o /dev/null --max-time 2 http://<service>/ || echo FALHA; sleep 0.2; done'
+```
+
+Regra geral: quando um resultado é mau, reproduzir à mão antes de acreditar
+nele. Um número mau que não se reproduz é quase sempre erro de instrumento.
+
+---
+
 ### Aplicação com erros `E57P01` depois de a base de dados reiniciar
 
 ```
@@ -310,6 +334,92 @@ Distinguir dos outros estados:
 
 ---
 
+### `argocd-applicationset-controller` em CrashLoopBackOff há 24 horas
+
+O incidente mais instrutivo do projeto, porque **não foi descoberto por
+ninguém a olhar** — foi a monitorização a encontrá-lo na primeira hora de vida.
+
+**Como apareceu.** A testar os alertas em 13/08/2026, o `KubePodCrashLooping`
+estava `firing` — mas não era o pod de teste. Era o
+`argocd-applicationset-controller`, em CrashLoopBackOff havia 47 minutos, com
+**208 reinícios acumulados em 24 horas**. Falhava desde a instalação do ArgoCD,
+no dia anterior, e passou despercebido porque nada do que se usa depende dele.
+
+#### Diagnóstico
+
+```bash
+kubectl -n argocd get pods
+kubectl -n argocd logs deploy/argocd-applicationset-controller --tail=30
+```
+
+De 10 em 10 segundos, sempre o mesmo:
+
+```
+failed to get restmapping: no matches for kind "ApplicationSet" in version "argoproj.io/v1alpha1"
+  if kind is a CRD, it should be installed before calling Start
+```
+
+E ao fim de 2 minutos:
+
+```
+failed to wait for applicationset caches to sync ... timed out waiting for cache to be synced
+```
+
+O ciclo completo: arranca → procura o tipo de recurso que devia gerir → não
+existe → espera pela sincronização da cache → desiste → morre → o kubelet
+reinicia. Repetir 208 vezes.
+
+#### Causa raiz: uma anotação grande demais
+
+A tentativa de instalar o CRD em falta revelou o verdadeiro problema:
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/crds/applicationset-crd.yaml
+```
+
+```
+The CustomResourceDefinition "applicationsets.argoproj.io" is invalid:
+metadata.annotations: Too long: may not be more than 262144 bytes
+```
+
+O `kubectl apply` do lado do cliente guarda uma **cópia integral do manifesto**
+na anotação `kubectl.kubernetes.io/last-applied-configuration` — é assim que
+sabe, na aplicação seguinte, o que apagar e o que manter. O CRD dos
+ApplicationSets é grande ao ponto de essa cópia ultrapassar o limite de 256 KB
+que o etcd impõe às anotações.
+
+Foi exatamente isto que aconteceu na instalação inicial: o `install.yaml`
+aplicou dezenas de objetos com sucesso e **este falhou no meio do output**,
+sem parar nada. O ArgoCD ficou a funcionar — Applications, sync, self-heal,
+tudo bem — com um controller a morrer em ciclo ao lado.
+
+#### Correção
+
+```bash
+kubectl apply --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/crds/applicationset-crd.yaml
+kubectl -n argocd rollout restart deploy/argocd-applicationset-controller
+kubectl -n argocd get pods -w
+```
+
+O `--server-side` faz o merge no servidor: a propriedade dos campos é
+registada em `metadata.managedFields` em vez de numa anotação, e por isso não
+há limite de tamanho a estourar.
+
+#### O que levar daqui
+
+1. **Um `kubectl apply` de um ficheiro grande pode falhar parcialmente.** O
+   código de saída e as últimas linhas do output não contam a história toda —
+   confirmar sempre com `kubectl get` o que interessa.
+2. **`--server-side` deve ser o omissão para manifests de terceiros**, sobretudo
+   os que trazem CRDs. Ver a recomendação no doc 07.
+3. **Um componente pode falhar durante dias sem consequência visível.** Só se
+   dá por ele quando fizer falta — tipicamente no pior momento.
+
+> Esta entrada é a justificação prática da sessão 5. A monitorização pagou-se
+> a si própria antes de o primeiro teste de alerta chegar ao fim.
+
+---
+
 ## Registo pessoal
 
 | Data | Problema | Causa | Solução | Tempo perdido |
@@ -324,3 +434,4 @@ Distinguir dos outros estados:
 | 11/08/2026 | Workflow `docs.yml` falhava no `cache: pip` | o `setup-python` procura `requirements.txt`; o ficheiro chama-se `requirements-docs.txt` | `cache-dependency-path: requirements-docs.txt` | |
 | 12/08/2026 | Queda de energia com o cluster a correr | falha elétrica, desktop sem bateria | recuperação autónoma em ~5 min, sem intervenção; ver doc 08, secção 8.5 | 0 (nada a fazer) |
 | 12/08/2026 | `AGE` dos nós mostrava 38h depois do reinício | é a idade do objeto `Node` no etcd, não tempo de funcionamento | usar `docker ps` para uptime real | |
+| 13/08/2026 | `argocd-applicationset-controller` com 208 reinícios em 24 h | o CRD `ApplicationSet` nunca foi criado: falhou em silêncio no `install.yaml` por a anotação `last-applied-configuration` exceder os 256 KB do etcd | `kubectl apply --server-side` do CRD e `rollout restart` do controller | **detetado pela monitorização**, não por inspeção |

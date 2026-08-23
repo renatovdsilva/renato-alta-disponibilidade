@@ -1,0 +1,136 @@
+# ═════════════════════════════════════════════════════════════════════════════
+# RenatoTrack — aplicação (fase PostgreSQL)
+#
+# O QUE MUDOU FACE À VERSÃO ANTERIOR, E PORQUÊ:
+#
+#   replicas: 1  ->  2        Antes o estado eram ficheiros JSON dentro do pod.
+#                             Duas réplicas escreviam por cima uma da outra
+#                             (writeFileSync do ficheiro inteiro, sem lock) e
+#                             perdia-se um talão em silêncio. Com o estado no
+#                             PostgreSQL, a concorrência passa a ser problema
+#                             da base de dados — que foi feita para isso, com
+#                             transações e restrições de unicidade.
+#
+#   Recreate  ->  RollingUpdate
+#                             O Recreate era imposto pelo PVC ReadWriteOnce: o
+#                             pod novo não conseguia montar o volume enquanto o
+#                             antigo não morresse. Sem PVC, esse bloqueio
+#                             desaparece e passa a haver deploys sem downtime.
+#
+#   sem volumes, sem symlinks, sem entrypoint a semear ficheiros.
+#   O container fica sem estado nenhum. É descartável — que é a definição de
+#   uma aplicação que escala.
+#
+# O PVC `renatotrack-data` NÃO é apagado por este manifesto. Fica como estava,
+# desligado da aplicação, até a migração estar validada. Ver deploy/README-postgres.md.
+# ═════════════════════════════════════════════════════════════════════════════
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: renatotrack
+  namespace: renatotrack
+  labels:
+    app.kubernetes.io/name: renatotrack
+    app.kubernetes.io/part-of: renatotrack
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      # maxUnavailable: 0 -> nunca há menos de 2 pods a servir durante um
+      # deploy. Só é possível porque o pod novo já não espera por um volume.
+      maxUnavailable: 0
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: renatotrack
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: renatotrack
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+      # Espalhar as duas réplicas por nós diferentes dos 3 do k3d. `preferred`
+      # e não `required`: com um nó em manutenção, é melhor ter as duas no
+      # mesmo nó do que ter uma em Pending.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: renatotrack
+      containers:
+        - name: renatotrack
+          image: renatotrack:2.0.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3020
+          env:
+            # A única coisa que a aplicação precisa de saber. Se esta variável
+            # desaparecer, o servidor volta sozinho ao modo ficheiros — o que
+            # em produção seria pior do que falhar. Por isso é obrigatória
+            # aqui: se o Secret não existir, o pod não arranca de todo.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: renatotrack-postgres
+                  key: DATABASE_URL
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3020"
+          # ─── Sondas ────────────────────────────────────────────────────────
+          # liveness em /healthz  — só verifica que o processo responde. NÃO
+          #   toca no Postgres: se a base de dados tiver um soluço, não faz
+          #   sentido reiniciar os pods da aplicação por causa disso.
+          # readiness em /readyz  — faz SELECT 1. Se a base de dados estiver em
+          #   baixo, o pod sai do Service (deixa de receber tráfego) mas fica
+          #   vivo e volta sozinho quando o Postgres voltar.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 3
+            failureThreshold: 20
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            # Agora que não há symlinks a criar nem ficheiros a escrever, o
+            # sistema de ficheiros pode ser só de leitura. É a diferença
+            # prática de ter tirado o estado de dentro do container.
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            # Único sítio escrevível. Não é estado — é rascunho, e desaparece
+            # com o pod. Existe só para o caso de alguma biblioteca precisar
+            # de /tmp e o sistema de ficheiros só de leitura a apanhar de
+            # surpresa.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      # 30 s chega para o SIGTERM fechar o servidor e o pool de ligações.
+      terminationGracePeriodSeconds: 30

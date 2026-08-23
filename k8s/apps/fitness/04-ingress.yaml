@@ -1,0 +1,106 @@
+# =============================================================================
+#  Ingress NGINX — DOIS objetos, de propósito.
+#
+#  Porquê separados e não um Ingress com dois hosts?
+#  A annotation `cert-manager.io/cluster-issuer` aplica-se ao Ingress INTEIRO.
+#  Se pusesses os dois hosts no mesmo objeto, o cert-manager ia tentar emitir um
+#  certificado Let's Encrypt também para `fitness.localhost` — e falhava sempre,
+#  porque `.localhost` não é um domínio público e não é validável por ACME.
+#
+#  ESTADO ATUAL (22/08/2026): o cert-manager NÃO está instalado. Os dois hosts
+#  usam certificados autoassinados criados à mão. Quando o cert-manager entrar,
+#  descomenta a annotation no Ingress público e apaga o Secret manual.
+#
+#  DUAS CORREÇÕES APRENDIDAS EM PRODUÇÃO — não as desfaças:
+#   1) A porta do backend é referida por NÚMERO, não por nome. O Service não
+#      define `name: http` nas portas, e referir um nome inexistente faz o
+#      NGINX devolver 503 com upstream vazio, sem erro visível em lado nenhum.
+#   2) O `auth-realm` só pode ter ASCII. Cabeçalhos HTTP não levam acentos, e o
+#      webhook de validação do NGINX rejeita o Ingress inteiro — silenciosamente,
+#      no caso de um apply em lote.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+#  1) ACESSO LOCAL — fitness.localhost
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fitnessphive-local
+  namespace: fitness
+  labels:
+    app.kubernetes.io/name: fitnessphive
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "8m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    # Autenticação básica também aqui: a app não tem login nenhum, e assim o
+    # comportamento é igual em casa e fora.
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: fitness-basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: "FitnessPHIVE"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - fitness.localhost
+      secretName: fitness-tls          # autoassinado, criado à mão
+  rules:
+    - host: fitness.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: fitnessphive
+                port:
+                  number: 80
+
+---
+# -----------------------------------------------------------------------------
+#  2) ACESSO EXTERNO — renatovdsilva.ddns.net
+#
+#  Exposto à internet pela DMZ do router. Tem obrigatoriamente:
+#    - autenticação básica (a app não tem login próprio)
+#    - rate limit (trava brute-force e scanners)
+#    - TLS
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fitnessphive-public
+  namespace: fitness
+  labels:
+    app.kubernetes.io/name: fitnessphive
+  annotations:
+    # Descomentar quando o cert-manager estiver instalado:
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "8m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    # --- Autenticação básica ---------------------------------------------
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: fitness-basic-auth
+    # SÓ ASCII. Ver nota no topo do ficheiro.
+    nginx.ingress.kubernetes.io/auth-realm: "FitnessPHIVE"
+    # --- Travão a scanners e brute-force ---------------------------------
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+    nginx.ingress.kubernetes.io/limit-connections: "20"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - renatovdsilva.ddns.net
+      secretName: fitness-tls-public
+  rules:
+    - host: renatovdsilva.ddns.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: fitnessphive
+                port:
+                  number: 80

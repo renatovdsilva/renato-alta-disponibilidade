@@ -90,6 +90,20 @@ alertmanager:
 grafana:
   # adminPassword vem por --set. Não escrever aqui.
   defaultDashboardsTimezone: Europe/Lisbon
+  # Servido em domínio próprio, na raiz — ver k8s/platform/ingress-plataforma.yaml.
+  #
+  # O Grafana usa o root_url para construir URLs absolutos: redirecionamentos
+  # depois do login, ligações em alertas, "share" de painéis. Sem isto, o
+  # valor por omissão é http://localhost:3000 e essas ligações apontam para o
+  # sítio errado — a UI funciona, mas os links levam a lado nenhum.
+  #
+  # Com subcaminho (ex.: /grafana) seria preciso também
+  # `serve_from_sub_path: true`. Foi para evitar isso que se optou por um
+  # domínio por ferramenta.
+  grafana.ini:
+    server:
+      domain: grafana.localhost
+      root_url: "http://grafana.localhost"
   resources:
     requests:
       cpu: 50m

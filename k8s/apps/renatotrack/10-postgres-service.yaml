@@ -1,0 +1,45 @@
+# ═════════════════════════════════════════════════════════════════════════════
+# Service HEADLESS do PostgreSQL (clusterIP: None).
+#
+# Headless = sem IP virtual e sem balanceamento. O DNS devolve diretamente o IP
+# do pod. É o que um StatefulSet precisa, por dois motivos:
+#
+#   1. Identidade estável. Cada pod ganha um nome DNS próprio:
+#        renatotrack-postgres-0.renatotrack-postgres.renatotrack.svc.cluster.local
+#      Com um Service normal, ligar-se-ia a "um pod qualquer" — irrelevante com
+#      uma réplica, fatal no dia em que houver uma réplica primária e uma
+#      secundária e for preciso escrever sempre na primária.
+#
+#   2. Nada de balanceamento a meio de uma sessão. Uma ligação a uma base de
+#      dados tem estado (transações, prepared statements); não é tráfego HTTP
+#      que se possa espalhar por réplicas à sorte.
+#
+# Para a aplicação basta o nome curto do Service, `renatotrack-postgres`, que
+# com uma réplica resolve para o pod. É o que está na DATABASE_URL.
+#
+# NOTA: este Postgres é SÓ do RenatoTrack. O do namespace `quinta` é de outra
+# aplicação e continua onde está — aplicações separadas, bases separadas, para
+# que um restauro de backup ou uma migração de esquema aqui não possa afetar lá.
+# ═════════════════════════════════════════════════════════════════════════════
+apiVersion: v1
+kind: Service
+metadata:
+  name: renatotrack-postgres
+  namespace: renatotrack
+  labels:
+    app.kubernetes.io/name: renatotrack-postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: renatotrack
+spec:
+  clusterIP: None
+  # O pod é publicado no DNS mal é criado, antes de passar a readiness. Ajuda o
+  # arranque a frio: o Job de migração encontra o nome mesmo enquanto o initdb
+  # ainda está a correr, em vez de falhar com NXDOMAIN.
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: renatotrack-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP

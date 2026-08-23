@@ -18,10 +18,34 @@ Com GitOps, o estado desejado está no Git e o ArgoCD encarrega-se de o fazer co
 
 ```bash
 kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl apply --server-side -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 kubectl -n argocd rollout status deploy/argocd-server --timeout=300s
 kubectl -n argocd get pods
 ```
+
+> **`--server-side` não é opcional.** Sem ele, o CRD dos ApplicationSets falha
+> em silêncio no meio do output: o `kubectl apply` clássico guarda uma cópia
+> integral do manifesto na anotação `last-applied-configuration`, e esse CRD é
+> grande ao ponto de ultrapassar o limite de 256 KB do etcd.
+>
+> O resultado é traiçoeiro — o ArgoCD instala e funciona, mas o
+> `argocd-applicationset-controller` fica em CrashLoopBackOff permanente,
+> à procura de um tipo de recurso que não existe. Aconteceu aqui, e só foi
+> descoberto 24 horas e 208 reinícios depois, pela monitorização. Ver
+> `docs/09-troubleshooting.md`.
+>
+> Se a instalação já foi feita sem `--server-side`:
+> ```bash
+> kubectl apply --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/crds/applicationset-crd.yaml
+> kubectl -n argocd rollout restart deploy/argocd-applicationset-controller
+> ```
+>
+> Confirmar que ficou tudo de pé, e não apenas o `argocd-server`:
+> ```bash
+> kubectl -n argocd get pods
+> kubectl get crd | grep argoproj
+> ```
 
 Password inicial do `admin`:
 
@@ -30,19 +54,27 @@ kubectl -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath="{.data.password}" | base64 -d; echo
 ```
 
-Aceder à UI:
+Aceder à UI — desde 14/08/2026 por Ingress, em `http://argocd.localhost`:
 
 ```bash
-kubectl port-forward svc/argocd-server -n argocd 8081:443
+# uma vez: pôr o servidor em modo inseguro, para o NGINX falar HTTP com ele
+kubectl -n argocd patch configmap argocd-cmd-params-cm --type merge \
+  -p '{"data":{"server.insecure":"true"}}'
+kubectl -n argocd rollout restart deploy/argocd-server
+
+kubectl apply -f k8s/platform/ingress-plataforma.yaml
 ```
 
-`https://localhost:8081` — utilizador `admin`.
+Sem o modo inseguro, o `argocd-server` redireciona HTTP para HTTPS e o
+resultado atrás do Ingress é um ciclo de redirecionamentos. A alternativa era
+a anotação `backend-protocol: "HTTPS"` — a escolha e a razão estão comentadas
+no próprio manifesto.
 
-> **Porta 8081, não 8080.** A 8080 está a ser usada pelo port-forward do
-> Ingress (secção 4.7). Duas ligações à mesma porta local não coexistem.
+Em caso de necessidade pontual, o port-forward continua a funcionar:
 
-> **`https`, não `http`.** O `argocd-server` serve TLS com certificado
-> autoassinado; o browser vai avisar. É esperado num cluster local.
+```bash
+kubectl port-forward svc/argocd-server -n argocd 8081:443   # https://localhost:8081
+```
 
 Depois de entrar, mudar a password e apagar o secret inicial:
 
@@ -189,7 +221,38 @@ Pontos importantes da definição em
 
 ---
 
-## 7.6 Fluxo de trabalho a partir daqui
+## 7.6 Mais do que uma aplicação
+
+O ArgoCD deixa de ser um caso de estudo quando gere mais do que uma coisa.
+A partir de 14/08/2026 o repositório aloja três aplicações:
+
+| Aplicação | Namespace | Fonte | Formato |
+|---|---|---|---|
+| Quinta do Calvário | `quinta` | `charts/quinta` | Helm chart |
+| RenatoTrack | `renatotrack` | `k8s/apps/renatotrack` | manifests |
+| FitnessPHIVE | `fitness` | `k8s/apps/fitness` | manifests |
+
+**Uma Application por aplicação**, em `argocd/`. Cada uma tem o seu ciclo de
+sync, o seu estado de saúde e o seu histórico — um erro numa não bloqueia as
+outras, o que não seria verdade com uma Application única a apontar para a raiz
+do repositório.
+
+Os dois formatos convivem sem configuração especial. O chart existe onde há
+valores por ambiente; onde há um ambiente só, manifests simples chegam. Não há
+mérito em converter o que já funciona.
+
+Pré-requisitos manuais de cada uma (Secrets e imagens importadas), o
+procedimento de migração e o aviso sobre o self-heal estão em
+[`docs/13-aplicacoes-gitops.md`](13-aplicacoes-gitops.md).
+
+> **O que muda no dia a dia:** com três Applications em self-heal, o `kubectl`
+> deixa de ser a forma de alterar o cluster. Um `kubectl patch` num recurso
+> gerido dura segundos. Foi o que aconteceu ao Ingress catch-all da Quinta, que
+> nunca chegou ao Git e desapareceu no primeiro sync.
+
+---
+
+## 7.7 Fluxo de trabalho a partir daqui
 
 ```
 alterar values.yaml → git commit → git push → ArgoCD sincroniza → cluster atualizado
@@ -207,7 +270,7 @@ argocd app sync quinta
 
 ---
 
-## 7.7 Demonstração de self-heal
+## 7.8 Demonstração de self-heal
 
 O teste que mostra a diferença entre "aplicar YAML" e GitOps.
 
@@ -258,7 +321,37 @@ que é exatamente o estado em que vive um cluster gerido à mão.
 | 12/08/2026 | recursos recriados pelo ArgoCD | **61 s** — Deployment 2/2, Service ClusterIP `10.43.65.52`, Ingress em `quinta.localhost` com os 3 IPs dos nós |
 | 12/08/2026 | estado da Application | `Healthy` + `Synced`, aplicação validada no browser |
 | 12/08/2026 | self-heal testado (réplicas) | `scale --replicas=5` revertido para 2 em **1–2 s** |
+| 12/08/2026 | commit e push do chart corrigido | `fullnameOverride`, `securityContext` e Ingress catch-all |
+| 13/08/2026 | **ciclo completo validado** | o ArgoCD trocou `quinta-quinta` por `quinta-web` sozinho, a partir do Git. 2/2 réplicas, sem `kubectl` nenhum pelo meio |
+| 13/08/2026 | CRD `ApplicationSet` em falta | detetado pela monitorização — 208 reinícios em 24 h. Corrigido com `apply --server-side`. Ver doc 09 |
 | | self-heal testado (imagem) | |
+
+### O ciclo completo, validado em 13/08/2026
+
+Este é o momento em que o GitOps deixou de ser configuração e passou a ser
+demonstrável.
+
+O chart tinha ficado com os nomes errados (`quinta-quinta`) por uma razão banal
+e instrutiva: **as correções estavam na pasta local, não no Git**. O ArgoCD lê
+o repositório remoto — o que não foi commitado não existe para ele. Bastou
+`git push`.
+
+A partir daí, sem um único `kubectl`:
+
+```
+git push → ArgoCD deteta → cria quinta-web → faz prune de quinta-quinta → 2/2 Ready
+```
+
+O `prune: true` é a metade que costuma ser esquecida. Sem ele, ficariam os dois
+conjuntos de recursos a servir a mesma aplicação: o novo, criado a partir do
+Git, e o antigo, órfão e invisível para quem só olha para o repositório.
+
+**A lição a levar:** quando o cluster não corresponde ao que se espera, a
+primeira pergunta em GitOps deixa de ser "o que está mal no cluster?" e passa a
+ser "o que é que o repositório tem, afinal?". `git status` antes de
+`kubectl describe`.
+
+---
 
 ### Observações
 

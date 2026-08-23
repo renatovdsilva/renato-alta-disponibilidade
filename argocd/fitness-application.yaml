@@ -1,0 +1,54 @@
+# Application do ArgoCD para o FitnessPHIVE.
+#
+# PRÉ-REQUISITOS MANUAIS — ver docs/13-aplicacoes-gitops.md:
+#
+#   1. Três Secrets no namespace `fitness`, nenhum deles no Git:
+#        - fitness-basic-auth   (autenticação básica do Ingress)
+#        - fitness-tls          (certificado de fitness.localhost)
+#        - fitness-tls-public   (certificado de renatovdsilva.ddns.net)
+#
+#   2. Imagem `fitnessphive:0.1.0` importada nos nós:
+#         k3d image import fitnessphive:0.1.0 -c alta-disponibilidade
+#
+#   3. O Ingress `fitnessphive-public` no Git TEM de já incluir as duas
+#      correções feitas à mão (porta do backend por número, auth-realm sem
+#      acentos). Caso contrário o primeiro sync repõe a versão que o webhook
+#      do NGINX rejeita. Ver k8s/apps/fitness/README.md.
+#
+# NOTA: o Deployment usa `strategy: Recreate` com um PVC ReadWriteOnce, porque
+# a persistência é um ficheiro SQLite. Cada sync que altere o Deployment
+# implica downtime — o pod antigo tem de largar o volume antes de o novo o
+# montar. É consequência assumida, não defeito de configuração.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: fitness
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/renatovdsilva/renato-alta-disponibilidade.git
+    targetRevision: main
+    path: k8s/apps/fitness
+    directory:
+      recurse: false
+      exclude: "*.md"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: fitness
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+  revisionHistoryLimit: 10

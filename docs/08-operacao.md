@@ -17,6 +17,7 @@ kubectl get nodes
 # estado geral
 kubectl get pods -A
 kubectl get nodes -o wide
+kubectl -n argocd get applications        # saúde das 3 aplicações num relance
 kubectl top nodes            # requer metrics-server
 kubectl top pods -A
 
@@ -38,19 +39,36 @@ kubectl port-forward svc/<svc> -n <ns> 8080:80
 
 ## 8.3 Publicar uma nova versão
 
-```bash
-# 1. construir
-docker build -t quinta-calvario:1.1.0 apps/quinta-calvario
+Vale para qualquer das três aplicações geridas por GitOps. **A ordem importa:
+importar a imagem antes de commitar a tag.** Ao contrário, o ArgoCD sincroniza
+para uma imagem que nenhum nó tem e os pods ficam em `ImagePullBackOff`.
 
-# 2. importar para o cluster
+```bash
+# 1. construir (no repositório da aplicação)
+docker build -t quinta-calvario:1.1.0 .
+
+# 2. importar para os nós — ANTES do commit
 k3d image import quinta-calvario:1.1.0 -c alta-disponibilidade
 
-# 3. atualizar a tag no values e fazer commit
-#    o ArgoCD trata do resto
+# 3. atualizar a tag no ficheiro certo e fazer push
+#    Quinta       → charts/quinta/values.yaml
+#    RenatoTrack  → k8s/apps/renatotrack/20-deployment.yaml
+#    FitnessPHIVE → k8s/apps/fitness/20-deployment.yaml
+git commit -am "Quinta 1.1.0" && git push
 
 # 4. acompanhar
+kubectl -n argocd get application quinta -w
 kubectl rollout status deployment/quinta-web -n quinta
 ```
+
+> **`kubectl set image` já não funciona.** Com self-heal ativo, a alteração
+> dura segundos até o ArgoCD repor a tag do Git. A única forma de publicar é
+> pelo repositório.
+
+> **FitnessPHIVE tem downtime a cada publicação.** `strategy: Recreate` com PVC
+> `ReadWriteOnce` — o pod antigo tem de largar o volume antes de o novo o
+> montar. É a consequência de guardar estado num ficheiro SQLite, assumida
+> conscientemente.
 
 ---
 
@@ -113,8 +131,7 @@ significa, do lado mau, que os dados estão presos àquele nó.
 ### O que não recuperou
 
 Todos os `kubectl port-forward` morreram com a queda — o do ArgoCD na 8081 e o
-do Ingress na 8080. É a mesma lição da secção 4.6 do doc 04, agora com um
-segundo exemplo: **o cluster recupera sozinho, os túneis de desenvolvimento
+do Ingress na 8080. **O cluster recupera sozinho, os túneis de desenvolvimento
 não.** São processos na máquina, não recursos do Kubernetes, e ninguém os
 repõe.
 
@@ -124,15 +141,87 @@ kubectl port-forward svc/argocd-server -n argocd 8081:443 &
 kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8080:80 &
 ```
 
+---
+
+## 8.6 O `kubectl port-forward` — três falhas, uma regra
+
+Ao longo do projeto o `port-forward` falhou de três maneiras diferentes, todas
+documentadas. Vale a pena juntá-las, porque a conclusão é a mesma e é fácil de
+esquecer:
+
+| Onde | O que aconteceu |
+|---|---|
+| Queda de energia (8.5) | morreu com a máquina e não voltou sozinho |
+| Recriação do `postgres-0` (doc 04, 4.6) | ficou preso a um pod que já não existia, sem erro visível |
+| Teste de resiliência (doc 04, 4.5) | falseou uma medição — 115 falhas em 290 pedidos numa aplicação saudável |
+
+O `port-forward` é um processo local a multiplexar ligações sobre a API do
+Kubernetes. Liga-se a **um pod concreto**, não segue substituições, não
+reconecta e não foi feito para ligações sucessivas rápidas.
+
+A quarta falha veio com a segunda queda de energia (14/08): morreram os três
+port-forwards em uso — ArgoCD (8081), Grafana (3001) e Prometheus (9090).
+
+> **Regra:** o `port-forward` serve para **inspeção pontual** — espreitar um
+> serviço sem Ingress, correr uma migração, aceder a algo por minutos. Nunca
+> para **medição** nem para **exposição**.
+>
+> - Para medir: gerar carga **dentro** do cluster, contra o Service.
+> - Para expor: Ingress.
+
+O corolário incomoda mais do que parece: qualquer número obtido através de um
+túnel tem de ser confirmado por outra via antes de ir para a documentação — ou
+para um currículo.
+
+### A mudança: Ingress para as ferramentas da plataforma
+
+Em 14/08/2026 as três ferramentas passaram a ter Ingress próprio. **O
+port-forward deixa de ser o método normal de acesso e passa a exceção.**
+
+| Ferramenta | Endereço |
+|---|---|
+| ArgoCD | `http://argocd.localhost` |
+| Grafana | `http://grafana.localhost` |
+| Prometheus | `http://prometheus.localhost` |
+
+Manifests em `k8s/platform/ingress-plataforma.yaml`. O ganho não é comodidade:
+os Ingress são objetos do cluster, portanto **sobrevivem a quedas de energia,
+a reinícios de pods e a mudanças de nó**. Um port-forward é um processo na
+máquina, que ninguém repõe.
+
+Fica menos uma coisa a fazer à mão a seguir a cada arranque — e a secção 8.1
+passa a ser mesmo só `k3d cluster start`, quando for preciso.
+
+### Segunda ocorrência — 14/08/2026
+
+Nova queda de energia, mesmo cenário: desligamento abrupto, cluster a correr.
+**O comportamento repetiu-se por completo** — os contentores voltaram sozinhos,
+os pods ficaram todos `Running`, os dados sobreviveram, sem uma única
+intervenção manual.
+
+Duas ocorrências independentes, com o mesmo resultado, deixam de ser anedota:
+é **comportamento consistente e reprodutível** deste laboratório, e pode ser
+descrito como característica e não como sorte.
+
+O que voltou a não recuperar foram os `kubectl port-forward` — desta vez os
+três (ArgoCD, Grafana, Prometheus). Foi o que motivou a mudança para Ingress,
+na secção 8.6.
+
 ### O que isto vale
 
-Um cluster de laboratório sobreviveu a um corte de energia sem encerramento
-ordenado, recuperou sozinho em cinco minutos e não perdeu dados. Nenhum teste
-simulado dá esta garantia — e é por isso que fica documentado com data e hora.
+Um cluster de laboratório sobreviveu a **dois** cortes de energia sem
+encerramento ordenado, recuperou sozinho das duas vezes e nunca perdeu dados.
+Nenhum teste simulado dá esta garantia — e é por isso que fica documentado com
+data e hora.
+
+A parte que não é sorte: a recuperação depende de o estado estar em PVC e não
+na memória do pod, de o Docker Desktop arrancar com o sistema, e de as
+aplicações tolerarem encontrar a base de dados ainda a subir. Nenhuma dessas
+três coisas acontece por acaso.
 
 ---
 
-## 8.6 Recomeçar do zero
+## 8.7 Recomeçar do zero
 
 ```bash
 k3d cluster delete alta-disponibilidade

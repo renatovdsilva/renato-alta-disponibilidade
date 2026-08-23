@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fitness
+  labels:
+    app.kubernetes.io/name: fitnessphive
+    app.kubernetes.io/part-of: fitness

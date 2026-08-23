@@ -1,0 +1,85 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Ingress NGINX — dois objetos: acesso local e acesso externo.
+#
+# `.localhost` resolve para 127.0.0.1 nos browsers, mas NÃO no resolver do
+# Windows nem no do WSL. Se `curl http://track.localhost` falhar, acrescenta ao
+# /etc/hosts do Ubuntu (e/ou ao hosts do Windows):
+#     127.0.0.1  track.localhost
+#
+# NOTA IMPORTANTE: a porta do backend é referida por NÚMERO (3020), não por
+# nome. O Service não define nomes nas portas, e referir um nome inexistente
+# faz o NGINX devolver 503 com upstream vazio.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: renatotrack
+  namespace: renatotrack
+  labels:
+    app.kubernetes.io/name: renatotrack
+  annotations:
+    # O dashboard envia talões inteiros em POST /api/compras.
+    nginx.ingress.kubernetes.io/proxy-body-size: "8m"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: track.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: renatotrack
+                port:
+                  number: 3020
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# ACESSO EXTERNO — renatotrack.ddns.net
+#
+# Segundo nome do No-IP (a conta gratuita permite vários nomes independentes,
+# mas não subdomínios). Exposto pela DMZ do router.
+#
+# É por aqui que o Tasker do telemóvel envia os dados de saúde.
+#
+# A aplicação NÃO tem autenticação própria e guarda dados de saúde e compras.
+# A autenticação básica do Ingress é a única proteção — não a retires.
+#
+# Pré-requisitos manuais (não estão no Git, de propósito):
+#   kubectl -n renatotrack create secret generic renatotrack-basic-auth --from-file=auth
+#   kubectl -n renatotrack create secret tls renatotrack-tls-public --cert=... --key=...
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: renatotrack-public
+  namespace: renatotrack
+  labels:
+    app.kubernetes.io/name: renatotrack
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "8m"
+    # SÓ ASCII no realm — o webhook do NGINX rejeita acentos.
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: renatotrack-basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: "RenatoTrack"
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+    nginx.ingress.kubernetes.io/limit-connections: "20"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - renatotrack.ddns.net
+      secretName: renatotrack-tls-public
+  rules:
+    - host: renatotrack.ddns.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: renatotrack
+                port:
+                  number: 3020

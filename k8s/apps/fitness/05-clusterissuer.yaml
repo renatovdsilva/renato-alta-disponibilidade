@@ -1,0 +1,56 @@
+# =============================================================================
+#  ClusterIssuer do Let's Encrypt (HTTP-01 via Ingress NGINX)
+#
+#  NÃO está no kustomization.yaml de propósito: é um recurso CLUSTER-SCOPED e
+#  só funciona depois de o cert-manager estar instalado. Aplica-o à parte.
+#
+#  ORDEM:
+#    1. instalar cert-manager
+#    2. kubectl apply -f 05-clusterissuer.yaml   (começa pelo staging!)
+#    3. só depois aplicar o Ingress público
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+#  STAGING — usa este PRIMEIRO. Emite certificados não confiáveis (o browser
+#  continua a dar aviso) mas tem limites muito altos. Serve para provar que o
+#  desafio HTTP-01 chega cá de fora antes de gastares tentativas no `prod`.
+#
+#  O `prod` tem limite de 5 falhas por hora e 50 certificados por semana por
+#  domínio registável. Como `ddns.net` está na Public Suffix List,
+#  `renatovdsilva.ddns.net` conta como domínio próprio — não partilhas o limite
+#  com os outros milhões de utilizadores do No-IP. Boa notícia.
+# -----------------------------------------------------------------------------
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: renatovdsilva@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx
+
+---
+# -----------------------------------------------------------------------------
+#  PRODUÇÃO — muda a annotation do Ingress para `letsencrypt-prod` só depois de
+#  o staging ter emitido com sucesso.
+# -----------------------------------------------------------------------------
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: renatovdsilva@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx

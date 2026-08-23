@@ -1,0 +1,48 @@
+# Application do ArgoCD para o RenatoTrack.
+#
+# PRÉ-REQUISITOS MANUAIS — ver docs/13-aplicacoes-gitops.md:
+#
+#   1. Secret `renatotrack-postgres` no namespace `renatotrack`. Não está no
+#      Git (D7) e o ArgoCD não o cria. Sem ele, os pods ficam em
+#      CreateContainerConfigError.
+#
+#   2. Imagem `renatotrack:2.0.1` importada nos nós:
+#         k3d image import renatotrack:2.0.1 -c alta-disponibilidade
+#      Não está em registo nenhum — o Deployment tem de usar
+#      imagePullPolicy: IfNotPresent.
+#
+# Fonte: manifests simples (sem Helm), em k8s/apps/renatotrack/.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: renatotrack
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/renatovdsilva/renato-alta-disponibilidade.git
+    targetRevision: main
+    path: k8s/apps/renatotrack
+    directory:
+      recurse: false
+      # Não tentar interpretar o README.md da pasta como manifesto.
+      exclude: "*.md"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: renatotrack
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+  revisionHistoryLimit: 10

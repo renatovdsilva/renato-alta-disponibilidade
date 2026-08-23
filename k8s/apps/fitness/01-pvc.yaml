@@ -1,0 +1,32 @@
+# -----------------------------------------------------------------------------
+#  Volume de dados do FitnessPHIVE
+#
+#  O que persiste aqui (/app/data dentro do container):
+#    - fitlog.db (+ .db-wal / .db-shm)  → agenda de treinos, quando há SQLite
+#    - treinos.json                     → mesma agenda, fallback sem SQLite
+#    - cargas.json                      → registo de cargas por exercício
+#                                         (este é SEMPRE JSON, mesmo com SQLite)
+#
+#  O que NÃO está aqui: gifs_cache/. São imagens derivadas de um repositório
+#  público, iguais para toda a gente, e vão dentro da imagem — não são dados
+#  do utilizador. 2,5 MB, não justifica volume.
+#
+#  accessMode ReadWriteOnce: só um Pod escreve. É consistente com um ficheiro
+#  SQLite/JSON e com replicas:1 + strategy Recreate no Deployment.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fitness-data
+  namespace: fitness
+  labels:
+    app.kubernetes.io/name: fitnessphive
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # k3d traz o provisioner "local-path" da Rancher por omissão.
+  # Comenta a linha para usar a StorageClass default do cluster.
+  storageClassName: local-path

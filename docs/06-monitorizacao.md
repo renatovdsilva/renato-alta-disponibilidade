@@ -58,20 +58,38 @@ preciso.
 
 ## 6.2 Aceder
 
-As portas 8080 e 8081 já estão ocupadas por outros port-forwards (Ingress e
-ArgoCD). Estas três estão livres:
+Desde 14/08/2026 o acesso é por **Ingress**, não por port-forward — os
+port-forwards morriam a cada queda de energia e tinham de ser repostos à mão
+(ver `docs/08-operacao.md`, secção 8.6).
 
 ```bash
-kubectl port-forward -n monitoring svc/monitoring-grafana 3001:80 &
-kubectl port-forward -n monitoring svc/monitoring-kube-prometheus-prometheus 9090:9090 &
-kubectl port-forward -n monitoring svc/monitoring-kube-prometheus-alertmanager 9093:9093 &
+kubectl apply -f k8s/platform/ingress-plataforma.yaml
 ```
 
 | Serviço | Endereço | Utilizador |
 |---|---|---|
-| Grafana | `http://localhost:3001` | `admin` |
-| Prometheus | `http://localhost:9090` | — |
-| Alertmanager | `http://localhost:9093` | — |
+| Grafana | `http://grafana.localhost` | `admin` |
+| Prometheus | `http://prometheus.localhost` | — |
+| Alertmanager | *(sem Ingress — port-forward quando for preciso)* | — |
+
+O Grafana precisa de saber em que URL está a ser servido, senão constrói
+ligações absolutas para `http://localhost:3000`:
+
+```yaml
+grafana:
+  grafana.ini:
+    server:
+      domain: grafana.localhost
+      root_url: "http://grafana.localhost"
+```
+
+Já está no ficheiro de valores. Aplicar com `helm upgrade`.
+
+Para o Alertmanager, ou em caso de necessidade pontual:
+
+```bash
+kubectl port-forward -n monitoring svc/monitoring-kube-prometheus-alertmanager 9093:9093
+```
 
 Recuperar a password do Grafana a qualquer momento:
 
@@ -127,6 +145,28 @@ Regras em [`monitoring/alerts.yaml`](https://github.com/renatovdsilva/renato-alt
 
 ## 6.5 Teste do alerta
 
+### A monitorização pagou-se antes do teste acabar
+
+O primeiro alerta a disparar não foi o do pod de teste. Foi um problema real
+que já existia havia 24 horas: o `argocd-applicationset-controller` em
+CrashLoopBackOff, com **208 reinícios acumulados**, desde a instalação do
+ArgoCD no dia anterior.
+
+Ninguém tinha dado por isso — e não por distração. O ArgoCD funcionava:
+Applications sincronizadas, self-heal a responder em 1-2 segundos, tudo
+`Healthy`. O componente avariado não é usado por nada aqui, portanto a avaria
+não tinha sintoma visível.
+
+**É exatamente para isto que serve monitorizar.** Sem métricas, o problema
+continuaria escondido até ao dia em que fizesse falta um ApplicationSet — e
+nessa altura o diagnóstico seria feito à pressa, com alguém a precisar da
+funcionalidade.
+
+Diagnóstico completo e causa raiz (um CRD que falhou em silêncio por exceder o
+limite de 256 KB das anotações do etcd) em `docs/09-troubleshooting.md`.
+
+---
+
 ### O problema: o ArgoCD não deixa
 
 O procedimento óbvio — estragar a Quinta de propósito — **não funciona mais**.
@@ -166,17 +206,36 @@ Limpar no fim — não deixa rasto nenhum:
 kubectl delete -f monitoring/crashloop-test.yaml
 ```
 
-**O que cronometrar.** O tempo total de deteção tem duas parcelas, e vale a
-pena registá-las separadas:
+**Não esperar deteção imediata.** Há dois alertas de CrashLoop no cluster, com
+tempos muito diferentes:
 
-1. **até `pending`** — tempo para acumular mais de 3 reinícios em 10 minutos,
-   condicionado pelo backoff do kubelet (10 s, 20 s, 40 s...) e pelo intervalo
-   de scraping (30 s por omissão)
-2. **de `pending` a `firing`** — os `for: 2m` da regra, fixos
+| Regra | Origem | Expressão | `for` | Ordem de grandeza |
+|---|---|---|---|---|
+| `PodCrashLooping` | nossa (`monitoring/alerts.yaml`) | `increase(...[10m]) > 3` | 2m | poucos minutos |
+| `KubePodCrashLooping` | do chart | `max_over_time(...[5m])` | **15m** | **15 a 20 min** |
 
-O `for` existe para não disparar com um reinício isolado. É uma escolha
-deliberada entre ruído e rapidez: baixá-lo dá um número melhor no currículo e
-um alerta pior na prática.
+Pod de teste aplicado às **07:09:22 UTC** em 13/08/2026.
+
+**Janela da expressão e `for` são coisas distintas**, e é onde se confundem
+expectativas:
+
+- a **janela** (`[5m]`, `[10m]`) é o intervalo de tempo que a consulta olha
+  para trás em cada avaliação — define *o que* conta como condição verdadeira
+- o **`for`** é quanto tempo essa condição tem de se manter verdadeira, em
+  avaliações consecutivas, antes de o alerta passar de `pending` a `firing`
+
+Somam-se: com `[5m]` e `for: 15m`, entre o primeiro reinício e o `firing` podem
+passar 20 minutos. Não é lentidão nem avaria — é a rede de segurança contra
+alertas por um reinício isolado.
+
+**O que cronometrar,** em duas parcelas separadas:
+
+1. **até `pending`** — acumular reinícios suficientes, condicionado pelo
+   backoff do kubelet (10 s, 20 s, 40 s...) e pelo scraping (30 s)
+2. **de `pending` a `firing`** — o `for` da regra, fixo
+
+Baixar o `for` dá um número melhor no currículo e um alerta pior na prática. A
+escolha deve ser explicada, não otimizada.
 
 ### Variante com a aplicação real
 
@@ -219,6 +278,92 @@ só uma automação.
 
 ## Registo
 
+| Data | Ação | Resultado |
+|---|---|---|
+| 13/08/2026 | `kube-prometheus-stack` instalado | **ok**, sem erros, namespace `monitoring`, com o ficheiro de valores do repositório |
+| 13/08/2026 | acesso | Grafana em `localhost:3001`, Prometheus em `localhost:9090` |
+| 13/08/2026 | primeiras métricas | dashboard *Compute Resources / Namespace (Pods)* a mostrar `quinta` — ver 6.6 |
+
 | Data | Alerta testado | Tempo até disparar |
 |---|---|---|
 | | PodCrashLooping | |
+
+Password do `admin` do Grafana, se for preciso outra vez:
+
+```bash
+kubectl -n monitoring get secret -l app.kubernetes.io/component=admin-secret \
+  -o jsonpath='{.items[0].data.admin-password}' | base64 -d; echo
+```
+
+---
+
+## 6.6 Primeira leitura real — 13/08/2026
+
+Namespace `quinta`, em repouso, sem carga nenhuma.
+
+### Agregados do namespace
+
+| Métrica | Valor |
+|---|---|
+| CPU utilizado / requests | **1,05%** |
+| CPU utilizado / limits | 0,158% |
+| Memória utilizada / requests | **18,9%** |
+| Memória utilizada / limits | 4,72% |
+
+### Por pod
+
+| Pod | CPU (cores) | Memória | Request CPU | % do request |
+|---|---|---|---|---|
+| `quinta-web-…-jzs6p` | 0,000438 | 37,2 MiB | 0,100 | 0,438% |
+| `quinta-web-…-2wjvf` | 0,000409 | 38,8 MiB | 0,100 | 0,409% |
+| `postgres-0` | 0,00231 | 20,0 MiB | 0,100 | 2,31% |
+
+### As quatro caixas do topo não medem a mesma coisa
+
+O dashboard mostra utilização sobre `requests` **e** sobre `limits`, e a
+diferença entre as duas é o que explica quase tudo o resto:
+
+- **sobre requests** — quanto se usa daquilo que foi *reservado*. O scheduler
+  aparta essa capacidade no nó, use-se ou não. É o número que diz se o cluster
+  está a ser desperdiçado.
+- **sobre limits** — quanto falta para bater no teto. É o número que avisa de
+  *throttling* de CPU e de OOMKill.
+
+Um pod pode estar nos 5% do limite e nos 90% do request: folga para crescer,
+mas a reservar quase tudo o que pediu. Ou o contrário. Olhar só para uma das
+duas dá sempre metade da história.
+
+### Right-sizing: os requests estão ~230× acima do uso
+
+O `quinta-web` pede 0,100 cores e consome 0,000438 — cerca de **230 vezes
+menos** do que reserva.
+
+Porque é que isso importa, mesmo com CPU de sobra: o scheduler decide onde cabe
+um pod pela soma dos `requests` do nó, **não** pelo consumo real. Requests
+inflacionados fazem o nó parecer cheio enquanto está praticamente parado, e o
+resultado é menos pods por nó, ou pods em `Pending` num cluster ocioso.
+
+Num laboratório com 12 CPUs isto não custa nada. Num cluster gerido, é
+diretamente fatura ao fim do mês.
+
+> **O que estes números não autorizam.** São valores **em repouso, sem uma
+> única visita à aplicação**. Baixar os requests com base neles seria trocar um
+> erro por outro: com carga, um arranque de Next.js ou uma query pesada de
+> Postgres consomem muito mais, e um request demasiado baixo faz o scheduler
+> empilhar pods que depois competem por CPU.
+>
+> Para decidir a sério é preciso medir sob carga — um teste com `hey` ou `k6`,
+> a olhar para os percentis, não para a média. Fica como trabalho futuro.
+
+### Baseline de memória
+
+Números úteis para justificar o dimensionamento do cluster:
+
+| Componente | Memória em repouso |
+|---|---|
+| Réplica Next.js (standalone) | **~38 MiB** |
+| PostgreSQL 16 | **~20 MiB** |
+
+Duas réplicas da Quinta mais a base de dados cabem em menos de 100 MiB. O
+`output: 'standalone'` do Next não corta só o tamanho da imagem — corta também
+o que fica residente em memória.

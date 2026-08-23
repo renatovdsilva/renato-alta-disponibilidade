@@ -133,8 +133,56 @@ Não são decisões de arquitetura, são coisas que ficam por corrigir e que con
 
 ---
 
+## Encerramento gracioso — por implementar
+
+Identificado pelo teste de resiliência de 13/08/2026 (doc 04, secção 4.5): 19
+falhas em 600 pedidos ao destruir as réplicas sob carga. Parte dessas falhas é
+evitável.
+
+**A causa.** Quando um pod entra em terminação, duas coisas acontecem **em
+paralelo**:
+
+1. o kubelet envia `SIGTERM` ao container
+2. o controlador de endpoints remove o pod do Service, e essa remoção é
+   propagada a cada nó e a cada proxy
+
+Não há ordem garantida entre as duas. Durante essa janela, o Service ainda
+encaminha pedidos para um pod que já está a fechar — e esses pedidos falham.
+Não é defeito do Kubernetes: é a consequência de o plano de dados ser
+distribuído e eventualmente consistente.
+
+**Mitigação 1 — `preStop`.** Um atraso antes do `SIGTERM`, para dar tempo à
+remoção do endpoint de se propagar:
+
+```yaml
+lifecycle:
+  preStop:
+    exec:
+      command: ["sleep", "5"]
+```
+
+Parece um truque, e é — mas é a prática recomendada e usada em produção a
+sério. O container continua a servir normalmente durante esses segundos; só
+não recebe pedidos novos depois de o endpoint desaparecer.
+
+**Mitigação 2 — encerramento gracioso na aplicação.** Ao receber `SIGTERM`, o
+servidor deve parar de aceitar ligações novas e terminar as que estão em curso
+antes de sair. No Next em modo standalone isso implica tratar o sinal em vez de
+deixar o processo morrer de imediato.
+
+As duas são complementares: a primeira evita receber pedidos novos, a segunda
+evita cortar os que já estão a meio.
+
+**Expectativa realista:** com ambas, uma perda parcial (uma réplica de duas)
+deve aproximar-se de zero falhas. Numa destruição total continuará a haver uma
+janela — não há réplicas para servir enquanto nenhuma estiver `Ready`.
+
+---
+
 ## Melhorias futuras
 
+- [ ] `preStop` e encerramento gracioso (ver secção acima)
+- [ ] Repetir o teste de resiliência matando apenas uma réplica
 - [ ] Sealed Secrets
 - [ ] Backup automático do MySQL (CronJob com `mysqldump` para um PVC separado)
 - [ ] Reestruturar a Briosa para tirar `app/` de dentro do document root

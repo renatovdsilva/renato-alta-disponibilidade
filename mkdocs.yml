@@ -67,6 +67,7 @@ nav:
   - Plataforma:
       - Monitorização: 06-monitorizacao.md
       - GitOps: 07-gitops.md
+      - Aplicações geridas por GitOps: 13-aplicacoes-gitops.md
   - Referência:
       - Operação: 08-operacao.md
       - Troubleshooting: 09-troubleshooting.md
