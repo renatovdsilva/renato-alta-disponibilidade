@@ -32,9 +32,13 @@ spec:
     repoURL: https://github.com/renatovdsilva/renato-alta-disponibilidade.git
     targetRevision: main
     path: k8s/apps/fitness
-    directory:
-      recurse: false
-      exclude: "*.md"
+    # NÃO declarar `directory:` aqui. A pasta tem um kustomization.yaml, e o
+    # ArgoCD só o usa se detetar a pasta como aplicação Kustomize. Com um bloco
+    # `directory:` explícito, ele passa a ler os ficheiros um a um e trata o
+    # próprio kustomization.yaml como se fosse um recurso do cluster — o que
+    # falha com "failed to discover server resources for group version
+    # kustomize.config.k8s.io/v1beta1".
+    kustomize: {}
   destination:
     server: https://kubernetes.default.svc
     namespace: fitness
