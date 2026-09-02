@@ -1,0 +1,90 @@
+# =============================================================================
+#  CI — construção e publicação das imagens.
+#
+#  Fecha a lacuna que faltava na cadeia: até aqui as imagens eram construídas à
+#  mão com `docker build` e importadas com `k3d image import`. Isso significava
+#  que ninguém, além de mim e do meu portátil, conseguia reproduzir uma imagem.
+#
+#  A partir de agora cada push constrói e publica no GitHub Container Registry.
+#  O ArgoCD continua a tratar da entrega — este workflow só produz o artefacto.
+# =============================================================================
+
+name: Construir imagens
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - '.github/workflows/images.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # Uma execução por aplicação, em paralelo. Se uma falhar, as outras
+    # continuam — `fail-fast: false`.
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - name: quinta-calvario
+            context: apps/quinta-calvario
+          - name: briosa-agenda
+            context: apps/briosa-agenda
+          # RenatoTrack e FitnessPHIVE vivem noutros repositórios. Quando os
+          # trouxeres para aqui, acrescenta-os a esta lista e mais nada muda.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Sem isto não há cache entre execuções e cada build recomeça do zero.
+      - name: Preparar o Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Autenticar no registo
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Gera as tags automaticamente: `latest` no main, e o SHA curto do commit
+      # para se poder apontar a uma versão exata e fazer rollback.
+      - name: Calcular tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.app.name }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+
+      - name: Verificar se a aplicação existe neste repositório
+        id: check
+        run: |
+          if [ -f "${{ matrix.app.context }}/Dockerfile" ]; then
+            echo "existe=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "existe=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ matrix.app.context }} sem Dockerfile — a saltar."
+          fi
+
+      - name: Construir e publicar
+        if: steps.check.outputs.existe == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.app.context }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

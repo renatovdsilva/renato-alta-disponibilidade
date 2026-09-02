@@ -92,9 +92,27 @@ spec:
   tls:
     - hosts:
         - renatovdsilva.ddns.net
+        - alien.tail377879.ts.net
       secretName: fitness-tls-public
   rules:
+    # Mantido para o caso de a DMZ voltar a ser aberta. Hoje não responde:
+    # o encaminhamento no router foi removido a 01/09/2026, depois de se
+    # encontrarem tentativas de login de administrador vindas da internet.
     - host: renatovdsilva.ddns.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: fitnessphive
+                port:
+                  number: 80
+
+    # Acesso pela rede Tailscale. É por aqui que a aplicação é alcançada de
+    # fora de casa, sem nada exposto na internet — só dispositivos autenticados
+    # na tailnet lá chegam.
+    - host: alien.tail377879.ts.net
       http:
         paths:
           - path: /

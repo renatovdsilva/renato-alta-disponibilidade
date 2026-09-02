@@ -420,6 +420,117 @@ há limite de tamanho a estourar.
 
 ---
 
+## Migração de aplicações para ArgoCD — cinco erros reutilizáveis
+
+Levantados em 27/08/2026, ao passar o RenatoTrack e o FitnessPHIVE para GitOps.
+O RenatoTrack sincronizou à primeira, sem incidentes. O Fitness deu todos estes.
+
+### 1. Ingress devolve 503 com upstream vazio
+
+O backend referia a porta do Service **pelo nome** (`http`), e o Service não
+define nome nenhum nas suas portas:
+
+```yaml
+# errado — se o Service não nomear a porta
+backend:
+  service:
+    name: fitnessphive
+    port:
+      name: http
+
+# certo
+      port:
+        number: 80
+```
+
+Referir uma porta pelo nome só funciona se o **Service** a declarar com esse
+nome — não basta o container a nomear. Quando não resolve, o Ingress é aceite
+na mesma e o resultado é um upstream vazio: 503 sem explicação.
+
+Aconteceu nas duas aplicações — no `fitness` (porta 80) e no `renatotrack`
+(porta 3020).
+
+```bash
+kubectl -n <ns> get endpoints            # vazio confirma o diagnóstico
+kubectl -n <ns> get svc -o yaml | grep -A4 ports:
+```
+
+### 2. `auth-realm` com acentos faz o webhook rejeitar o Ingress
+
+```
+nginx.ingress.kubernetes.io/auth-realm: "FitnessPHIVE — acesso privado"
+```
+
+O travessão e os acentos rejeitam o **Ingress inteiro** no webhook de validação
+do NGINX. O valor vai para o cabeçalho `WWW-Authenticate`, e cabeçalhos HTTP
+são ASCII.
+
+Corrigido para `"FitnessPHIVE"`. O sintoma é enganador: o erro aparece na
+admissão do objeto, não em runtime, e nada aponta para a anotação.
+
+### 3. Secret TLS com nome errado no manifesto
+
+O manifesto referia `fitness-tls-local`; o Secret no cluster chama-se
+`fitness-tls`. O Ingress é criado sem erro e serve sem TLS ou com certificado
+por omissão.
+
+```bash
+kubectl -n <ns> get secret | grep tls
+kubectl -n <ns> get ingress <nome> -o jsonpath='{.spec.tls}'
+```
+
+Nomes de Secret são referências soltas: nada valida que existem.
+
+### 4. ClusterIssuers no repositório sem cert-manager instalado
+
+Os `ClusterIssuer` do cert-manager estavam no repositório, mas o cert-manager
+não está instalado — o tipo de recurso não existe no cluster e **o sync inteiro
+falha**, incluindo os recursos que estavam bem.
+
+Movidos para `k8s/platform/pendente/`, fora de qualquer Application.
+
+> Um manifesto que depende de um CRD ainda não instalado não é "código para
+> depois": é uma sincronização partida. Ou o CRD entra primeiro, ou o
+> manifesto sai do caminho do ArgoCD.
+
+### 5. O bloco `directory:` desliga o Kustomize — o mais subtil
+
+```
+failed to discover server resources for group version kustomize.config.k8s.io/v1beta1
+```
+
+A Application do fitness tinha um bloco `directory: {recurse, exclude}`
+explícito. **Declarar `directory:` diz ao ArgoCD que a pasta é um diretório de
+manifests simples**, e a deteção automática de Kustomize deixa de acontecer.
+A partir daí ele lê os ficheiros um a um — incluindo o próprio
+`kustomization.yaml`, que passa a ser tratado como um recurso a aplicar no
+cluster. Daí o erro sobre um grupo de API que não existe.
+
+```yaml
+# errado, numa pasta com kustomization.yaml
+source:
+  path: k8s/apps/fitness
+  directory:
+    recurse: false
+    exclude: "*.md"
+
+# certo
+source:
+  path: k8s/apps/fitness
+  kustomize: {}
+```
+
+Foi o que demorou mais a encontrar, porque a mensagem fala de descoberta de
+recursos do servidor e não sugere em momento nenhum que o problema é o modo de
+leitura da pasta.
+
+**Regra:** numa pasta com `kustomization.yaml`, nunca declarar `directory:`. O
+`exclude` de ficheiros passa a ser responsabilidade do próprio Kustomize — o
+que não estiver listado em `resources:` simplesmente não é aplicado, e por isso
+um README na pasta deixa de ser problema.
+
+---
+
 ## Registo pessoal
 
 | Data | Problema | Causa | Solução | Tempo perdido |
@@ -435,3 +546,8 @@ há limite de tamanho a estourar.
 | 12/08/2026 | Queda de energia com o cluster a correr | falha elétrica, desktop sem bateria | recuperação autónoma em ~5 min, sem intervenção; ver doc 08, secção 8.5 | 0 (nada a fazer) |
 | 12/08/2026 | `AGE` dos nós mostrava 38h depois do reinício | é a idade do objeto `Node` no etcd, não tempo de funcionamento | usar `docker ps` para uptime real | |
 | 13/08/2026 | `argocd-applicationset-controller` com 208 reinícios em 24 h | o CRD `ApplicationSet` nunca foi criado: falhou em silêncio no `install.yaml` por a anotação `last-applied-configuration` exceder os 256 KB do etcd | `kubectl apply --server-side` do CRD e `rollout restart` do controller | **detetado pela monitorização**, não por inspeção |
+| 27/08/2026 | Ingress com 503 e upstream vazio (fitness e renatotrack) | porta do Service referida por nome (`http`), que o Service não define | referência por número (80 e 3020) | |
+| 27/08/2026 | Ingress do fitness rejeitado pelo webhook do NGINX | `auth-realm` com travessão e acentos — cabeçalhos HTTP são ASCII | valor sem acentos | |
+| 27/08/2026 | TLS não aplicado no fitness | manifesto referia `fitness-tls-local`; o Secret chama-se `fitness-tls` | corrigido o nome no manifesto | |
+| 27/08/2026 | Sync do fitness falhava por inteiro | `ClusterIssuer` no repositório sem cert-manager instalado | movidos para `k8s/platform/pendente/` | |
+| 27/08/2026 | `failed to discover server resources for kustomize.config.k8s.io/v1beta1` | bloco `directory:` na Application desligava a deteção de Kustomize; o `kustomization.yaml` era tratado como recurso | remover `directory:`, usar `kustomize: {}` | o que mais demorou |

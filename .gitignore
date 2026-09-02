@@ -8,3 +8,11 @@ kubeconfig
 site/
 .venv/
 __pycache__/
+_cv/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+crash.log

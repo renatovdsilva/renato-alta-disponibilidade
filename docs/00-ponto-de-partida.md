@@ -69,7 +69,7 @@ wsl -l -v
 O projeto está concluído quando todas estas afirmações forem verdadeiras:
 
 - [x] `kubectl get nodes` mostra três nós em `Ready` *(confirmado em 11/08/2026 — ver `02-cluster.md`)*
-- [ ] As duas aplicações respondem no browser através do Ingress *(Quinta sim, desde 11/08/2026; Briosa por construir)*
+- [x] As aplicações respondem no browser através do Ingress *(27/08/2026 — Quinta, RenatoTrack e FitnessPHIVE. A Briosa continua por construir)*
 - [x] Matar um pod não interrompe o serviço, e isso está medido *(13/08/2026 — perda de 1 réplica: **0 falhas em 300 pedidos**; destruição total: 19/600, 96,8%)*
 - [x] O Grafana mostra métricas dos pods e dos nós *(13/08/2026 — ver `06-monitorizacao.md`, 6.6)*
 - [ ] Um alerta dispara quando se provoca uma falha, com tempo registado
@@ -105,4 +105,5 @@ O projeto está concluído quando todas estas afirmações forem verdadeiras:
 | 11/08/2026 | 3 (cont.) | | Deploy da Quinta no cluster: imagem importada para os 3 nós em 6 s, `quinta-web` com 2 réplicas em nós diferentes, Service e Ingress aplicados, login funcional. Rolling update demonstrado 2× sem downtime. Acesso externo por túnel cloudflared, validado por outra pessoa noutra rede. Repositório publicado e GitHub Pages ativas. | Briosa por construir; migrações versionadas do Prisma |
 | 12/08/2026 | 6 | | ArgoCD v3.5.0 instalado. Quinta migrada de `kubectl apply` para GitOps: recursos antigos apagados (dados intactos), Application `Healthy`/`Synced`, primeiro sync em 3 s e recursos recriados em 61 s. Self-heal validado — `scale` manual revertido em 1–2 s. **Queda de energia real às 07:41**: cluster recuperou sozinho em ~5 min, sem intervenção e sem perda de dados. | Chart em produção ainda é a versão antiga do Git (nomes `quinta-quinta`); falta commit e push |
 | 13/08/2026 | 5 | | `kube-prometheus-stack` instalado sem erros, com valores versionados e PVC para Prometheus e Grafana. Sete regras de alerta, filtradas por namespace e não por nome. Primeira leitura real do consumo: ~38 MiB por réplica Next.js, ~20 MiB no Postgres, CPU a 1% dos requests. Ciclo GitOps completo validado: o push corrigiu os nomes dos recursos sem qualquer `kubectl`. | Cronometrar o alerta `PodCrashLooping`; medir requests sob carga; Briosa |
+| 27/08/2026 | 6 (cont.) | | **Três aplicações geridas por GitOps**, todas `Synced` e `Healthy`: `quinta` (Helm), `renatotrack` (manifests, sync à primeira) e `fitness` (Kustomize, cinco correções antes do primeiro sync). O cluster deixou de ter estado que não esteja versionado. | Cronometrar o alerta; reconstrução pelo bootstrap; Briosa |
 | | 4 | | *(Helm — o chart já está em uso pelo ArgoCD; falta fechar o doc 05)* | |

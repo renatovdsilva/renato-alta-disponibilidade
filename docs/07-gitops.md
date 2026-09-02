@@ -226,11 +226,20 @@ Pontos importantes da definição em
 O ArgoCD deixa de ser um caso de estudo quando gere mais do que uma coisa.
 A partir de 14/08/2026 o repositório aloja três aplicações:
 
-| Aplicação | Namespace | Fonte | Formato |
-|---|---|---|---|
-| Quinta do Calvário | `quinta` | `charts/quinta` | Helm chart |
-| RenatoTrack | `renatotrack` | `k8s/apps/renatotrack` | manifests |
-| FitnessPHIVE | `fitness` | `k8s/apps/fitness` | manifests |
+| Aplicação | Namespace | Fonte | Formato | Estado |
+|---|---|---|---|---|
+| Quinta do Calvário | `quinta` | `charts/quinta` | Helm | `Synced` / `Healthy` |
+| RenatoTrack | `renatotrack` | `k8s/apps/renatotrack` | manifests | `Synced` / `Healthy` |
+| FitnessPHIVE | `fitness` | `k8s/apps/fitness` | **Kustomize** | `Synced` / `Healthy` |
+
+**Três formatos diferentes, geridos pela mesma ferramenta**, sem configuração
+especial — Helm, manifests simples e Kustomize. O ArgoCD deteta o formato pelo
+conteúdo da pasta.
+
+Com uma ressalva que custou uma hora: **numa pasta com `kustomization.yaml`,
+declarar um bloco `directory:` na Application desliga essa deteção.** O ArgoCD
+passa a ler os ficheiros um a um e trata o próprio `kustomization.yaml` como
+recurso a aplicar. Ver `docs/09-troubleshooting.md`.
 
 **Uma Application por aplicação**, em `argocd/`. Cada uma tem o seu ciclo de
 sync, o seu estado de saúde e o seu histórico — um erro numa não bloqueia as
@@ -245,10 +254,34 @@ Pré-requisitos manuais de cada uma (Secrets e imagens importadas), o
 procedimento de migração e o aviso sobre o self-heal estão em
 [`docs/13-aplicacoes-gitops.md`](13-aplicacoes-gitops.md).
 
-> **O que muda no dia a dia:** com três Applications em self-heal, o `kubectl`
-> deixa de ser a forma de alterar o cluster. Um `kubectl patch` num recurso
-> gerido dura segundos. Foi o que aconteceu ao Ingress catch-all da Quinta, que
-> nunca chegou ao Git e desapareceu no primeiro sync.
+### Nota de operação — o `kubectl` deixou de alterar o cluster
+
+Desde 27/08/2026 as três Applications estão com `selfHeal: true`. Em concreto:
+
+| Comando | O que acontece agora |
+|---|---|
+| `kubectl patch` / `kubectl edit` | revertido em segundos |
+| `kubectl apply` de um manifesto local | revertido, ou ignorado se não estiver no Git |
+| `kubectl set image` | revertido — a tag volta à do repositório |
+| `kubectl scale` | revertido para o valor do Git |
+| `kubectl delete` de um recurso gerido | recriado |
+
+Não é um efeito secundário a tolerar: é o objetivo. O cluster deixou de ter
+estado que não esteja versionado.
+
+**Todas as alterações passam pelo Git.** O ciclo é sempre o mesmo:
+
+```
+alterar ficheiro → git commit → git push → ArgoCD aplica
+```
+
+O `kubectl` continua a servir para **ler** — `get`, `describe`, `logs`,
+`events` — e para intervenções de emergência, que exigem desligar a automação
+explicitamente (ver 7.8).
+
+Já custou uma vez: o Ingress catch-all da Quinta foi criado à mão, nunca chegou
+ao Git, e desapareceu no primeiro sync. O ArgoCD aplicou o que o repositório
+dizia — o repositório é que não o mencionava.
 
 ---
 
@@ -324,6 +357,9 @@ que é exatamente o estado em que vive um cluster gerido à mão.
 | 12/08/2026 | commit e push do chart corrigido | `fullnameOverride`, `securityContext` e Ingress catch-all |
 | 13/08/2026 | **ciclo completo validado** | o ArgoCD trocou `quinta-quinta` por `quinta-web` sozinho, a partir do Git. 2/2 réplicas, sem `kubectl` nenhum pelo meio |
 | 13/08/2026 | CRD `ApplicationSet` em falta | detetado pela monitorização — 208 reinícios em 24 h. Corrigido com `apply --server-side`. Ver doc 09 |
+| 27/08/2026 | Application `renatotrack` | **sincronizou à primeira**, sem incidentes |
+| 27/08/2026 | Application `fitness` | cinco correções antes do primeiro sync — portas por nome, `auth-realm` com acentos, nome do Secret TLS, ClusterIssuers sem cert-manager, e o bloco `directory:` a desligar o Kustomize. Ver doc 09 |
+| 27/08/2026 | **três aplicações em GitOps** | `quinta`, `renatotrack` e `fitness` — todas `Synced` e `Healthy` |
 | | self-heal testado (imagem) | |
 
 ### O ciclo completo, validado em 13/08/2026

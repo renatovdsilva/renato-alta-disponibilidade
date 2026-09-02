@@ -105,6 +105,38 @@
         group: root
       when: k3d_check.rc != 0
 
+    # ── Terraform ────────────────────────────────────────────────────────────
+    # Instalado a partir do repositório oficial da HashiCorp e não do snap: o
+    # snap corre confinado e tem problemas a ler o kubeconfig e a falar com o
+    # socket do Docker, que é precisamente o que o provider do k3d precisa.
+    - name: Verificar se o Terraform está instalado
+      ansible.builtin.command: terraform version
+      register: terraform_check
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Adicionar a chave GPG da HashiCorp
+      ansible.builtin.apt_key:
+        url: https://apt.releases.hashicorp.com/gpg
+        keyring: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+        state: present
+      when: terraform_check.rc != 0
+
+    - name: Adicionar o repositório da HashiCorp
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com {{ ansible_distribution_release }} main"
+        state: present
+        filename: hashicorp
+      when: terraform_check.rc != 0
+
+    - name: Instalar o Terraform
+      ansible.builtin.apt:
+        name: terraform
+        state: present
+        update_cache: true
+      when: terraform_check.rc != 0
+
     # ── Verificação final ────────────────────────────────────────────────────
     - name: Recolher as versões instaladas
       ansible.builtin.command: "{{ item }}"
@@ -116,6 +148,7 @@
         - kubectl version --client -o yaml
         - helm version --short
         - k3d version
+        - terraform version
 
     - name: Mostrar as versões instaladas
       ansible.builtin.debug:

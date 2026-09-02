@@ -5,8 +5,13 @@ Três aplicações, três Applications do ArgoCD, um repositório.
 | Aplicação | Namespace | Fonte no Git | Formato | Estado |
 |---|---|---|---|---|
 | Quinta do Calvário | `quinta` | `charts/quinta` | Helm chart | gerida desde 12/08/2026 |
-| RenatoTrack | `renatotrack` | `k8s/apps/renatotrack` | manifests | a migrar |
-| FitnessPHIVE | `fitness` | `k8s/apps/fitness` | manifests | a migrar |
+| RenatoTrack | `renatotrack` | `k8s/apps/renatotrack` | manifests | gerida desde 27/08/2026 |
+| FitnessPHIVE | `fitness` | `k8s/apps/fitness` | **Kustomize** | gerida desde 27/08/2026 |
+
+> **Kustomize e o bloco `directory:` não coexistem.** Numa pasta com
+> `kustomization.yaml`, declarar `directory:` na Application desliga a deteção
+> automática e o ArgoCD passa a tratar o `kustomization.yaml` como um recurso a
+> aplicar. Usar `kustomize: {}`. Ver `docs/09-troubleshooting.md`.
 
 O ArgoCD lê charts e manifests simples sem configuração especial. A Quinta usa
 chart porque precisa de valores por ambiente; as outras duas têm um ambiente
@@ -174,6 +179,9 @@ Quinta ficaram com o nome errado durante um dia.
 
 | Data | Aplicação | Ação | Observação |
 |---|---|---|---|
-| 12/08/2026 | Quinta | migrada para ArgoCD | primeira |
-| | RenatoTrack | | |
-| | FitnessPHIVE | | |
+| 12/08/2026 | Quinta | migrada para ArgoCD | primeira; obrigou a apagar e recriar por causa do selector imutável |
+| 27/08/2026 | RenatoTrack | migrada | sync à primeira, sem incidentes |
+| 27/08/2026 | FitnessPHIVE | migrada | cinco correções antes do primeiro sync — ver doc 09 |
+
+**Estado em 27/08/2026:** as três `Synced` e `Healthy`, em três formatos
+diferentes (Helm, manifests simples e Kustomize).

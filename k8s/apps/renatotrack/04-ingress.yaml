@@ -71,9 +71,33 @@ spec:
   tls:
     - hosts:
         - renatotrack.ddns.net
+        - track.100-109-170-23.nip.io
       secretName: renatotrack-tls-public
   rules:
+    # Mantido para o caso de a DMZ voltar a ser aberta. Hoje não responde:
+    # o encaminhamento no router foi removido a 01/09/2026.
     - host: renatotrack.ddns.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: renatotrack
+                port:
+                  number: 3020
+
+    # Acesso pela rede Tailscale.
+    #
+    # O nip.io é um DNS público que devolve o IP embutido no próprio nome:
+    # `track.100-109-170-23.nip.io` resolve para 100.109.170.23, que é o
+    # endereço desta máquina na tailnet. Serve para ter nomes distintos por
+    # aplicação sem montar DNS próprio — o MagicDNS do Tailscale só dá um nome
+    # por máquina, e duas aplicações não podem partilhar o mesmo host.
+    #
+    # A resolução é pública, mas o endereço só é alcançável de dentro da
+    # tailnet. Nada fica exposto.
+    - host: track.100-109-170-23.nip.io
       http:
         paths:
           - path: /
