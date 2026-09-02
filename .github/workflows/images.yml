@@ -11,12 +11,15 @@
 
 name: Construir imagens
 
+# PRÉ-REQUISITO POR CUMPRIR — ver nota no fim do ficheiro.
+#
+# Só arranca à mão, de propósito. As pastas em `apps/` contêm apenas os
+# Dockerfiles; o código das aplicações vive noutros repositórios. Sem código no
+# contexto, o build falha logo no `COPY`.
+#
+# Enquanto isso não estiver resolvido, deixar o gatilho por push só produzia
+# emails de falha a cada commit.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'apps/**'
-      - '.github/workflows/images.yml'
   workflow_dispatch:
 
 env:
@@ -88,3 +91,30 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+# =============================================================================
+#  NOTA — o que falta para isto funcionar
+#
+#  O erro é claro:
+#      "/package.json": not found          (quinta-calvario)
+#      "/public_html/public_html": not found  (briosa-agenda)
+#
+#  As pastas em `apps/` só têm o Dockerfile. O código está noutros
+#  repositórios, e o build corre num runner limpo do GitHub que não tem acesso
+#  a nada fora deste repositório.
+#
+#  Três caminhos possíveis, por ordem de preferência:
+#
+#  1) Colocar este workflow em cada repositório de aplicação. É o mais correto:
+#     cada aplicação constrói a sua própria imagem, junto do seu código.
+#
+#  2) Fazer checkout dos repositórios das aplicações aqui, com
+#     `actions/checkout` e `repository:`. Precisa de um token com acesso a
+#     esses repositórios.
+#
+#  3) Trazer o código para cá, transformando isto num monorepo. É a maior
+#     mudança e provavelmente não se justifica.
+#
+#  Até lá as imagens continuam a ser construídas localmente e importadas com
+#  `k3d image import`, como está descrito em docs/03-containerizacao.md.
+# =============================================================================
