@@ -49,7 +49,7 @@ spec:
         fsGroup: 1000          # garante que o PVC fica escrevível pelo `node`
       containers:
         - name: fitnessphive
-          image: fitnessphive:0.1.0
+          image: fitnessphive:0.2.0
           # Imagem local importada com `k3d image import` — nunca ir buscar ao registry.
           imagePullPolicy: IfNotPresent
           ports:
