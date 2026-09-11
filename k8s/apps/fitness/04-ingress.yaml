@@ -7,9 +7,17 @@
 #  certificado Let's Encrypt também para `fitness.localhost` — e falhava sempre,
 #  porque `.localhost` não é um domínio público e não é validável por ACME.
 #
-#  ESTADO ATUAL (22/08/2026): o cert-manager NÃO está instalado. Os dois hosts
-#  usam certificados autoassinados criados à mão. Quando o cert-manager entrar,
-#  descomenta a annotation no Ingress público e apaga o Secret manual.
+#  ESTADO ATUAL (11/09/2026): o cert-manager ESTÁ instalado (v1.21.2) e existe o
+#  ClusterIssuer `letsencrypt-prod`. Por isso este ficheiro passou a ter TRÊS
+#  Ingress em vez de dois — pela mesma razão explicada acima:
+#
+#    - `fitnessphive-local`   → fitness.localhost          → autoassinado
+#    - `fitnessphive-public`  → renatovdsilva.ddns.net     → LET'S ENCRYPT
+#    - `fitnessphive-tailnet` → alien.tail377879.ts.net    → autoassinado
+#
+#  O host da tailnet teve de sair do Ingress público: `*.ts.net` resolve para um
+#  IP 100.x, que não é alcançável da internet, e por isso o desafio HTTP-01 da
+#  Let's Encrypt falharia — e uma falha num host faz falhar o certificado todo.
 #
 #  DUAS CORREÇÕES APRENDIDAS EM PRODUÇÃO — não as desfaças:
 #   1) A porta do backend é referida por NÚMERO, não por nome. O Service não
@@ -61,10 +69,16 @@ spec:
 # -----------------------------------------------------------------------------
 #  2) ACESSO EXTERNO — renatovdsilva.ddns.net
 #
-#  Exposto à internet pela DMZ do router. Tem obrigatoriamente:
+#  Exposto à internet por ENCAMINHAMENTO DE PORTAS no router (80 e 443 para
+#  192.168.1.200). A DMZ foi desligada e não volta: expunha a máquina inteira.
+#  Aqui só passam duas portas.
+#
+#  Tem obrigatoriamente:
 #    - autenticação básica (a app não tem login próprio)
 #    - rate limit (trava brute-force e scanners)
-#    - TLS
+#    - TLS válido, emitido pela Let's Encrypt e renovado automaticamente
+#
+#  A porta 80 tem de estar aberta: é por lá que entra o desafio HTTP-01 do ACME.
 # -----------------------------------------------------------------------------
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -74,8 +88,9 @@ metadata:
   labels:
     app.kubernetes.io/name: fitnessphive
   annotations:
-    # Descomentar quando o cert-manager estiver instalado:
-    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Emissão e renovação automáticas do certificado. Só funciona porque este
+    # Ingress tem UM único host, e esse host é público e validável.
+    cert-manager.io/cluster-issuer: letsencrypt-prod
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/proxy-body-size: "8m"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
@@ -92,12 +107,9 @@ spec:
   tls:
     - hosts:
         - renatovdsilva.ddns.net
-        - alien.tail377879.ts.net
-      secretName: fitness-tls-public
+      # Criado e renovado pelo cert-manager. NÃO criar este Secret à mão.
+      secretName: fitness-tls-ddns
   rules:
-    # Mantido para o caso de a DMZ voltar a ser aberta. Hoje não responde:
-    # o encaminhamento no router foi removido a 01/09/2026, depois de se
-    # encontrarem tentativas de login de administrador vindas da internet.
     - host: renatovdsilva.ddns.net
       http:
         paths:
@@ -109,9 +121,35 @@ spec:
                 port:
                   number: 80
 
-    # Acesso pela rede Tailscale. É por aqui que a aplicação é alcançada de
-    # fora de casa, sem nada exposto na internet — só dispositivos autenticados
-    # na tailnet lá chegam.
+---
+# -----------------------------------------------------------------------------
+#  3) ACESSO PELA TAILNET — alien.tail377879.ts.net
+#
+#  Separado do Ingress público desde 11/09/2026, para não arrastar consigo o
+#  certificado Let's Encrypt. Continua com certificado autoassinado, o que não
+#  é problema: só dispositivos autenticados na tailnet lá chegam.
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fitnessphive-tailnet
+  namespace: fitness
+  labels:
+    app.kubernetes.io/name: fitnessphive
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "8m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: fitness-basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: "FitnessPHIVE"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - alien.tail377879.ts.net
+      secretName: fitness-tls-public     # autoassinado, criado à mão
+  rules:
     - host: alien.tail377879.ts.net
       http:
         paths:
