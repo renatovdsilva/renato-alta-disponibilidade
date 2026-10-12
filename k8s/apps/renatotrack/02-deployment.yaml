@@ -68,7 +68,7 @@ spec:
                     app.kubernetes.io/name: renatotrack
       containers:
         - name: renatotrack
-          image: renatotrack:2.1.4
+          image: renatotrack:2.1.5
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
